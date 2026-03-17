@@ -1,0 +1,23 @@
+# NSE Trend Scanner Agent - Requirements
+
+# Market Data
+yfinance>=0.2.36
+
+# Data Processing
+pandas>=2.0.0
+ta>=0.11.0
+
+# Scheduling
+schedule>=1.2.0
+
+# HTTP Requests (for Telegram API)
+requests>=2.31.0
+
+# Telegram Bot
+python-telegram-bot>=20.0
+
+# Logging
+python-dotenv>=1.0.0
+
+# Date/Time utilities
+pytz>=2023.3
