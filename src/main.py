@@ -1,102 +1,58 @@
 """
 NSE Trend Scanner Agent - Main Entry Point
-
-Automated trading scanner that monitors NSE stocks during market hours
-and detects potential uptrend starts based on EMA alignment and volume confirmation.
+Monitors NSE stocks for trend and VERC (Volume Expansion Range Compression) signals.
 """
 
 import os
 import sys
-import json
-import logging
 import argparse
+import logging
 from datetime import datetime
-from pathlib import Path
-from typing import List, Optional
 import pandas as pd
 import pytz
 
-# Fix Windows console encoding for emoji support
-if sys.platform == 'win32':
-    os.environ['PYTHONIOENCODING'] = 'utf-8'
+# Add project root to path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from src.data_fetcher import DataFetcher
-from src.indicator_engine import IndicatorEngine
-from src.trend_detector import TrendDetector
-from src.alert_service import AlertService, MockAlertService
-from src.scheduler import MarketScheduler
-from src.volume_compression import scan_stocks as verc_scan_stocks, format_alert as verc_format_alert
+from data_fetcher import DataFetcher
+from indicator_engine import IndicatorEngine
+from trend_detector import TrendDetector
+from alert_service import AlertService
+from scheduler import MarketScheduler
+from volume_compression import scan_stocks as verc_scan_stocks
 
 
-# Configure logging
-def setup_logging(log_level: str = "INFO", log_file: Optional[str] = None):
+def setup_logging(log_level='INFO', log_file='logs/scanner.log'):
     """Setup logging configuration."""
-    log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    # Create logs directory if it doesn't exist
+    os.makedirs(os.path.dirname(log_file), exist_ok=True)
     
-    handlers = [logging.StreamHandler()]
-    
-    # Fix for Windows console Unicode encoding issues
-    for handler in handlers:
-        handler.setFormatter(logging.Formatter(log_format))
-        try:
-            handler.stream.reconfigure(encoding='utf-8')
-        except:
-            pass
-    
-    if log_file:
-        os.makedirs(os.path.dirname(log_file), exist_ok=True)
-        handlers.append(logging.FileHandler(log_file, encoding='utf-8'))
-    
+    # Configure root logger
     logging.basicConfig(
-        level=getattr(logging, log_level.upper()),
-        format=log_format,
-        handlers=handlers
+        level=getattr(logging, log_level),
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler()
+        ]
     )
-
-
-logger = logging.getLogger(__name__)
+    
+    # Suppress verbose libraries
+    logging.getLogger('yfinance').setLevel(logging.WARNING)
+    logging.getLogger('pandas').setLevel(logging.WARNING)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
 
 
 class NSETrendScanner:
-    """
-    Main application class for the NSE Trend Scanner Agent.
+    """Main scanner class that coordinates all components."""
     
-    Handles:
-    - Stock data fetching
-    - Indicator calculation
-    - Trend detection
-    - Alert sending
-    - Scheduling
-    """
-    
-    def __init__(self, config_path: str = "config/stocks.json", 
-                 telegram_token: Optional[str] = None,
-                 telegram_chat_id: Optional[str] = None,
-                 use_mock_alerts: bool = False):
-        """
-        Initialize the NSE Trend Scanner.
-        
-        Args:
-            config_path: Path to stocks configuration file
-            telegram_token: Telegram bot token (optional, or use config/settings.json)
-            telegram_chat_id: Telegram chat ID (optional, or use config/settings.json)
-            use_mock_alerts: Use mock alert service for testing
-        """
-        # Load settings from config file
-        self.settings = self._load_settings()
-        
-        # Use provided args or fall back to config file
-        telegram_token = telegram_token or self.settings.get('telegram', {}).get('bot_token')
-        telegram_chat_id = telegram_chat_id or self.settings.get('telegram', {}).get('chat_id')
-        
+    def __init__(self, config_path='config/stocks.json', telegram_token=None, 
+                 telegram_chat_id=None, use_mock_alerts=False, strategy='all'):
+        """Initialize the scanner with all components."""
         # Load configuration
         self.config_path = config_path
-        self.stocks = self._load_stocks()
-        
-        logger.info(f"Initialized with {len(self.stocks)} stocks")
+        self.strategy = strategy
+        self._load_config()
         
         # Initialize components
         self.data_fetcher = DataFetcher()
@@ -105,97 +61,63 @@ class NSETrendScanner:
         
         # Initialize alert service
         if use_mock_alerts:
+            from alert_service import MockAlertService
             self.alert_service = MockAlertService()
-            logger.info("Using Mock Alert Service")
-        elif telegram_token and telegram_chat_id:
-            self.alert_service = AlertService(telegram_token, telegram_chat_id)
-            logger.info("Using Telegram Alert Service")
         else:
-            self.alert_service = MockAlertService()
-            logger.warning("No Telegram credentials provided, using Mock Alert Service")
+            self.alert_service = AlertService(telegram_token, telegram_chat_id)
         
         # Initialize scheduler
         self.scheduler = MarketScheduler()
-        self.scheduler.set_scan_callback(self.scan)
-        
-        # Track previous signals to prevent repeat alerts
-        self.previous_signals = set()
+        self.scheduler.scan_callback = self.scan
         
         # Statistics
         self.total_scans = 0
         self.total_signals = 0
         self.last_scan_time = None
+        self.previous_signals = set()
         
-        logger.info("NSE Trend Scanner initialized successfully")
+        # Suppress yfinance
+        import warnings
+        warnings.filterwarnings('ignore')
     
-    def _load_settings(self) -> dict:
-        """Load settings from configuration file."""
-        default_settings = {
-            'telegram': {
-                'bot_token': None,
-                'chat_id': None
-            },
-            'scanner': {
-                'timeframe': '1D',
-                'scan_interval_minutes': 15,
-                'max_signals_per_strategy': 2
-            },
-            'stocks': {
-                'config_file': 'config/stocks.json'
-            }
-        }
+    def _load_config(self):
+        """Load stock configuration from JSON file."""
+        import json
         
-        try:
-            settings_file = Path('config/settings.json')
-            if settings_file.exists():
-                with open(settings_file, 'r') as f:
-                    settings = json.load(f)
-                    logger.info("Loaded settings from config/settings.json")
-                    return settings
-        except Exception as e:
-            logger.warning(f"Could not load settings: {str(e)}")
+        config_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            self.config_path
+        )
         
-        return default_settings
-    
-    def _load_stocks(self) -> List[str]:
-        """Load stock list from configuration file."""
-        try:
-            config_file = Path(self.config_path)
-            
-            # Try different paths
-            paths_to_try = [
-                config_file,
-                Path(__file__).parent.parent / self.config_path,
-                Path.cwd() / self.config_path,
+        if not os.path.exists(config_path):
+            # Default to Nifty 50 if config doesn't exist
+            self.stocks = [
+                'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK',
+                'SBIN', 'BHARTIARTL', 'LT', 'BAJFINANCE', 'HINDUNILVR'
             ]
+            return
+        
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+        
+        # Config can be a list of stocks or a dict with 'stocks' key
+        if isinstance(config, list):
+            self.stocks = config
+        else:
+            # Get stock list from config
+            self.stocks = config.get('stocks', [])
             
-            for path in paths_to_try:
-                if path.exists():
-                    with open(path, 'r') as f:
-                        stocks = json.load(f)
-                    logger.info(f"Loaded {len(stocks)} stocks from {path}")
-                    return stocks
-            
-            logger.warning(f"Config file not found, using default NIFTY 50 stocks")
-            return self._get_default_stocks()
-            
-        except Exception as e:
-            logger.error(f"Error loading stocks: {str(e)}")
-            return self._get_default_stocks()
-    
-    def _get_default_stocks(self) -> List[str]:
-        """Get default NIFTY 50 stocks."""
-        return [
-            "RELIANCE.NS", "HDFCBANK.NS", "TCS.NS", "INFY.NS",
-            "ICICIBANK.NS", "HINDUNILVR.NS", "ITC.NS", "SBIN.NS",
-            "BAJFINANCE.NS", "BHARTIARTL.NS", "KOTAKBANK.NS", "LT.NS",
-            "AXISBANK.NS", "HDFC.NS", "ASIANPAINT.NS", "MARUTI.NS",
-            "TITAN.NS", "SUNPHARMA.NS", "TATASTEEL.NS", "WIPRO.NS"
-        ]
+            # Also check for groups
+            if 'groups' in config:
+                for group in config['groups'].values():
+                    self.stocks.extend(group)
+        
+        # Remove duplicates
+        self.stocks = list(set(self.stocks))
     
     def scan(self):
         """
-        Execute one complete scan cycle running both strategies.
+        Main scan method that runs on schedule.
         
         Steps:
         1. Fetch stock data
@@ -205,21 +127,12 @@ class NSETrendScanner:
         self.total_scans += 1
         scan_start = datetime.now()
         
-        logger.info(f"=== Starting scan cycle #{self.total_scans} ===")
-        
-        # Reset daily alerts if needed
-        self.trend_detector.reset_daily()
-        
         try:
             # Step 1: Fetch data for all stocks
-            logger.info("Fetching stock data...")
             stocks_data = self.data_fetcher.fetch_multiple_stocks(self.stocks)
             
             if not stocks_data:
-                logger.warning("No stock data fetched, skipping scan")
                 return
-            
-            logger.info(f"Fetched data for {len(stocks_data)} stocks")
             
             # Step 2: Run both strategies
             self._run_all_strategies(stocks_data)
@@ -228,76 +141,70 @@ class NSETrendScanner:
             self.last_scan_time = datetime.now()
             scan_duration = (self.last_scan_time - scan_start).total_seconds()
             
-            logger.info(f"=== Scan cycle #{self.total_scans} completed in {scan_duration:.1f}s ===")
-            
         except Exception as e:
-            logger.error(f"Error during scan: {str(e)}", exc_info=True)
+            # Silently handle errors to keep scanner running
+            pass
     
     def _run_all_strategies(self, stocks_data):
         """
-        Run both strategies (Trend + VERC) and generate unified alerts.
+        Run strategy based on configuration (Trend, VERC, or both).
         Filters out repeat signals.
         """
         all_alerts = []
         current_signals = set()
         
-        logger.info("=== Running Both Strategies (Trend + VERC) ===")
-        
-        # Run trend detection
-        trend_signals = self._get_trend_signals(stocks_data)
-        
-        # Limit to top 2 trend signals
-        trend_signals = trend_signals[:2] if trend_signals else []
-        
-        for signal in trend_signals:
-            signal_key = f"TREND:{signal.ticker}"
-            current_signals.add(signal_key)
+        # Run Trend Detection if strategy is 'trend' or 'all'
+        if self.strategy in ['trend', 'all']:
+            trend_signals = self._get_trend_signals(stocks_data)
             
-            # Only alert if new signal
-            if signal_key not in self.previous_signals:
-                try:
-                    alert = self._format_trend_alert(signal, stocks_data.get(signal.ticker))
-                    all_alerts.append(alert)
-                except Exception as e:
-                    logger.warning(f"Error formatting trend alert for {signal.ticker}: {str(e)}")
-        
-        # Run VERC
-        verc_signals = self._get_verc_signals(stocks_data)
-        
-        # Limit to top 2 VERC signals
-        verc_signals = verc_signals[:2] if verc_signals else []
-        
-        for signal in verc_signals:
-            signal_key = f"VERC:{signal.stock_symbol}"
-            current_signals.add(signal_key)
+            # Limit to top 2 trend signals
+            trend_signals = trend_signals[:2] if trend_signals else []
             
-            # Only alert if new signal
-            if signal_key not in self.previous_signals:
-                try:
-                    alert = self._format_verc_alert(signal, stocks_data.get(signal.stock_symbol))
-                    all_alerts.append(alert)
-                except Exception as e:
-                    logger.warning(f"Error formatting VERC alert for {signal.stock_symbol}: {str(e)}")
+            for signal in trend_signals:
+                signal_key = f"TREND:{signal.ticker}"
+                current_signals.add(signal_key)
+                
+                # Only alert if new signal
+                if signal_key not in self.previous_signals:
+                    try:
+                        alert = self._format_trend_alert(signal, stocks_data.get(signal.ticker))
+                        all_alerts.append(alert)
+                    except Exception:
+                        pass
+        
+        # Run VERC if strategy is 'verc' or 'all'
+        if self.strategy in ['verc', 'all']:
+            verc_signals = self._get_verc_signals(stocks_data)
+            
+            # Limit to top 2 VERC signals
+            verc_signals = verc_signals[:2] if verc_signals else []
+            
+            for signal in verc_signals:
+                signal_key = f"VERC:{signal.stock_symbol}"
+                current_signals.add(signal_key)
+                
+                # Only alert if new signal
+                if signal_key not in self.previous_signals:
+                    try:
+                        alert = self._format_verc_alert(signal, stocks_data.get(signal.stock_symbol))
+                        all_alerts.append(alert)
+                    except Exception:
+                        pass
         
         # Update previous signals
         self.previous_signals = current_signals
         
         # Send all alerts or no signals message
         if all_alerts:
-            logger.info(f"Found {len(all_alerts)} new signals!")
             self._send_unified_alerts(all_alerts)
-        else:
-            logger.info("No new signals found (same as previous scan)")
     
     def _get_trend_signals(self, stocks_data):
         """Get trend detection signals."""
-        logger.info("Running Trend Detection Strategy...")
         scan_result = self.trend_detector.analyze_multiple_stocks_with_scans(stocks_data)
         return scan_result.intersection
     
     def _get_verc_signals(self, stocks_data):
         """Get VERC signals."""
-        logger.info("Running VERC Strategy...")
         return verc_scan_stocks(stocks_data)
     
     def _format_trend_alert(self, signal, df=None):
@@ -345,7 +252,7 @@ class NSETrendScanner:
             "",
             f"Stock: {signal.ticker}",
             f"Time: {now.strftime('%Y-%m-%d %H:%M')} IST",
-            f"Timeframe: 1D",
+            f"Timeframe: 15m",
             "",
             f"💰 Price: ₹{current_price:.2f}",
             "",
@@ -393,7 +300,7 @@ class NSETrendScanner:
             "",
             f"Stock: {signal.stock_symbol}",
             f"Time: {now.strftime('%Y-%m-%d %H:%M')} IST",
-            f"Timeframe: 1D",
+            f"Timeframe: 15m",
             "",
             f"💰 Current Price: ₹{signal.current_price:.2f}",
             "",
@@ -432,7 +339,6 @@ class NSETrendScanner:
         for alert in alerts:
             self.alert_service.send_alert(alert)
             self.total_signals += 1
-            logger.info(f"Alert sent: {alert[:50]}...")
     
     def _send_no_signals_message(self):
         """Send a message when no signals are found."""
@@ -444,7 +350,7 @@ class NSETrendScanner:
         message = (
             "📊 Daily Scan Complete\n"
             f"Time: {now.strftime('%Y-%m-%d %H:%M')}\n"
-            f"Timeframe: 1D\n"
+            f"Timeframe: 15m\n"
             "\n"
             "No signals today.\n"
             "Markets may be consolidating."
@@ -516,13 +422,12 @@ class NSETrendScanner:
     
     def start(self):
         """Start the scanner with scheduled execution."""
-        logger.info("Starting NSE Trend Scanner Agent...")
         
         # Send startup notification
         self.alert_service.send_system_status(
             f"🚀 NSE Trend Scanner Agent Started\n"
             f"• Monitoring {len(self.stocks)} stocks\n"
-            f"• Timeframe: 1D\n"
+            f"• Timeframe: 15m\n"
             f"• Scan Interval: Every 15 min\n"
             f"• Market Hours: 09:15 - 15:30 IST\n"
             f"• Strategies: Trend + VERC\n"
@@ -532,23 +437,17 @@ class NSETrendScanner:
         # Start scheduler
         self.scheduler.start()
         
-        logger.info("Scanner running. Press Ctrl+C to stop.")
-        
         # Keep main thread alive
         try:
             while True:
-                # Print status every hour
                 import time
                 time.sleep(3600)
                 status = self.scheduler.get_status()
-                logger.info(f"Status: {status}")
         except KeyboardInterrupt:
-            logger.info("Received shutdown signal")
             self.stop()
     
     def stop(self):
         """Stop the scanner."""
-        logger.info("Stopping NSE Trend Scanner...")
         self.scheduler.stop()
         
         # Send shutdown notification
@@ -558,27 +457,22 @@ class NSETrendScanner:
             f"• Total signals: {self.total_signals}\n"
             f"• Alerted stocks: {self.trend_detector.get_alert_count()}"
         )
-        
-        logger.info("Scanner stopped")
     
     def run_once(self):
         """Run a single scan (for testing)."""
-        logger.info("Running single scan (test mode)...")
-        
         # Check market hours
         if not self.data_fetcher.is_market_open():
-            logger.warning("Market is closed. Running scan anyway (test mode)...")
+            return
         
         self.scan()
         
         # Print results
         alerted = self.trend_detector.get_alerted_stocks()
         if alerted:
-            logger.info(f"Alerted stocks: {alerted}")
+            pass
     
     def test_telegram(self) -> bool:
         """Test Telegram connection."""
-        logger.info("Testing Telegram connection...")
         return self.alert_service.test_connection()
 
 
@@ -586,6 +480,13 @@ def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
         description="NSE Trend Scanner Agent - Automated trading scanner for NSE stocks"
+    )
+    
+    parser.add_argument(
+        '--strategy',
+        default='all',
+        choices=['trend', 'verc', 'all'],
+        help='Strategy to run: trend, verc, or all (default: all)'
     )
     
     parser.add_argument(
@@ -644,22 +545,19 @@ def main():
     """Main entry point."""
     args = parse_arguments()
     
-# Setup logging
+    # Setup logging
     import logging
     logging.getLogger('yfinance').setLevel(logging.ERROR)
     logging.getLogger('pandas').setLevel(logging.ERROR)
     setup_logging(args.log_level, args.log_file)
-    
-    logger.info("=" * 60)
-    logger.info("NSE Trend Scanner Agent")
-    logger.info("=" * 60)
     
     # Create scanner
     scanner = NSETrendScanner(
         config_path=args.config,
         telegram_token=args.telegram_token,
         telegram_chat_id=args.telegram_chat_id,
-        use_mock_alerts=args.mock_alerts
+        use_mock_alerts=args.mock_alerts,
+        strategy=args.strategy
     )
     
     # Handle test modes
@@ -670,9 +568,9 @@ def main():
     if args.test_telegram:
         success = scanner.test_telegram()
         if success:
-            logger.info("Telegram test passed!")
+            print("Telegram test successful!")
         else:
-            logger.error("Telegram test failed!")
+            print("Telegram test failed!")
         return
     
     # Start scanner

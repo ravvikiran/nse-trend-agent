@@ -48,9 +48,9 @@ class AlertService:
         self.enabled = bool(bot_token and chat_id)
         
         if self.enabled:
-            logger.info("AlertService initialized with Telegram enabled")
+            logger.debug("AlertService initialized with Telegram enabled")
         else:
-            logger.warning("AlertService initialized with Telegram DISABLED (no credentials)")
+            logger.debug("AlertService initialized with Telegram DISABLED (no credentials)")
     
     def send_message(self, text: str, parse_mode: str = "Markdown") -> bool:
         """
@@ -78,7 +78,7 @@ class AlertService:
             response = requests.post(url, json=payload, timeout=30)
             response.raise_for_status()
             
-            logger.info(f"Alert sent successfully")
+            logger.debug(f"Alert sent successfully")
             return True
             
         except requests.exceptions.RequestException as e:
@@ -204,7 +204,7 @@ class AlertService:
             if self.send_alert(signal):
                 success_count += 1
         
-        logger.info(f"Sent {success_count}/{len(signals)} batch alerts")
+        logger.debug(f"Sent {success_count}/{len(signals)} batch alerts")
         return success_count
     
     def send_system_status(self, message: str) -> bool:
@@ -228,7 +228,7 @@ class AlertService:
             True if connection successful, False otherwise
         """
         if not self.enabled:
-            logger.warning("Cannot test Telegram connection - credentials not configured")
+            logger.debug("Cannot test Telegram connection - credentials not configured")
             return False
         
         try:
@@ -238,7 +238,7 @@ class AlertService:
             
             bot_info = response.json()
             if bot_info.get('ok'):
-                logger.info(f"Telegram bot connected: @{bot_info['result']['username']}")
+                logger.debug(f"Telegram bot connected: @{bot_info['result']['username']}")
                 return True
             return False
             
@@ -289,7 +289,7 @@ class MockAlertService(AlertService):
     def send_message(self, text: str, parse_mode: str = "Markdown") -> bool:
         """Store message instead of sending."""
         self.sent_messages.append(text)
-        logger.info(f"[MOCK] Would send alert: {text[:100]}...")
+        logger.debug(f"[MOCK] Would send alert: {text[:100]}...")
         return True
     
     def get_sent_messages(self) -> List[str]:

@@ -39,7 +39,7 @@ class MarketScheduler:
         self.scheduler_thread = None
         self.scan_callback = None
         self.ist = pytz.timezone('Asia/Kolkata')
-        logger.info("MarketScheduler initialized")
+        logger.debug("MarketScheduler initialized")
     
     def is_market_open(self) -> bool:
         """
@@ -121,35 +121,35 @@ class MarketScheduler:
             callback: Function to call for scanning
         """
         self.scan_callback = callback
-        logger.info("Scan callback set")
+        logger.debug("Scan callback set")
     
     def run_scan(self):
         """Execute the scan callback if market is open."""
         if not self.is_market_open():
-            logger.info("Market is closed, skipping scan")
+            logger.debug("Market is closed, skipping scan")
             return
         
         if self.scan_callback:
             try:
-                logger.info("Executing scheduled scan...")
+                logger.debug("Executing scheduled scan...")
                 self.scan_callback()
-                logger.info("Scan completed")
+                logger.debug("Scan completed")
             except Exception as e:
                 logger.error(f"Error during scheduled scan: {str(e)}")
         else:
-            logger.warning("No scan callback set")
+            logger.debug("No scan callback set")
     
     def schedule_jobs(self):
         """Schedule the scan jobs."""
         # Schedule scans every 15 minutes during market hours
         schedule.every(self.SCAN_INTERVAL).minutes.do(self.run_scan)
         
-        logger.info(f"Scheduled scans every {self.SCAN_INTERVAL} minutes during market hours")
+        logger.debug(f"Scheduled scans every {self.SCAN_INTERVAL} minutes during market hours")
     
     def start(self):
         """Start the scheduler in a background thread."""
         if self.running:
-            logger.warning("Scheduler already running")
+            logger.debug("Scheduler already running")
             return
         
         self.running = True
@@ -159,7 +159,7 @@ class MarketScheduler:
         self.scheduler_thread = threading.Thread(target=self._run_scheduler, daemon=True)
         self.scheduler_thread.start()
         
-        logger.info("Scheduler started in background")
+        logger.debug("Scheduler started in background")
     
     def stop(self):
         """Stop the scheduler."""
@@ -172,11 +172,11 @@ class MarketScheduler:
         if self.scheduler_thread:
             self.scheduler_thread.join(timeout=5)
         
-        logger.info("Scheduler stopped")
+        logger.debug("Scheduler stopped")
     
     def _run_scheduler(self):
         """Run the scheduler loop."""
-        logger.info("Scheduler loop started")
+        logger.debug("Scheduler loop started")
         
         while self.running:
             # Check if market is open
@@ -187,13 +187,13 @@ class MarketScheduler:
                 # Market is closed, wait and check again
                 wait_time = self.get_time_until_market_open()
                 if wait_time:
-                    logger.info(f"Market closed. Waiting {wait_time/60:.1f} minutes until open")
+                    logger.debug(f"Market closed. Waiting {wait_time/60:.1f} minutes until open")
                     time.sleep(min(wait_time, 60))  # Check at least every minute
             
             # Sleep for a bit to avoid CPU spinning
             time.sleep(1)
         
-        logger.info("Scheduler loop exited")
+        logger.debug("Scheduler loop exited")
     
     def run_once(self):
         """
@@ -201,7 +201,7 @@ class MarketScheduler:
         Used for testing or manual triggers.
         """
         if not self.is_market_open():
-            logger.warning("Market is closed. Scan will run but may not have live data.")
+            logger.debug("Market is closed. Scan will run but may not have live data.")
         
         self.run_scan()
     
@@ -226,10 +226,10 @@ class MarketScheduler:
         This can be called externally to trigger a scan.
         """
         if self.is_market_open():
-            logger.info("Forcing market hours scan...")
+            logger.debug("Forcing market hours scan...")
             self.run_scan()
         else:
-            logger.info("Cannot force scan - market is closed")
+            logger.debug("Cannot force scan - market is closed")
 
 
 def create_scheduler(scan_callback: Callable) -> MarketScheduler:

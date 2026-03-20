@@ -42,7 +42,7 @@ class IndicatorEngine:
             DataFrame with added indicator columns
         """
         if df is None or df.empty:
-            logger.warning("Empty DataFrame passed to calculate_indicators")
+            logger.debug("Empty DataFrame passed to calculate_indicators")
             return df
         
         try:

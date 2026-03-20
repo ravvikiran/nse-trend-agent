@@ -205,18 +205,18 @@ class TrendDetector:
         """
         signals = []
         
-        logger.info(f"Analyzing {len(stocks_data)} stocks for trend signals...")
+
         
         for ticker, df in stocks_data.items():
             try:
                 signal = self.analyze_stock(df, ticker)
                 if signal:
                     signals.append(signal)
-                    logger.info(f"✅ Signal detected: {ticker} - {signal.signal_type}")
+
             except Exception as e:
                 logger.error(f"Error analyzing {ticker}: {str(e)}")
         
-        logger.info(f"Found {len(signals)} trend signals out of {len(stocks_data)} stocks")
+
         return signals
     
     def analyze_multiple_stocks_with_scans(self, stocks_data: Dict[str, pd.DataFrame]) -> ScanResult:
@@ -240,7 +240,7 @@ class TrendDetector:
         scan_a_signals = []
         scan_b_signals = []
         
-        logger.info(f"Running dual scan on {len(stocks_data)} stocks...")
+
         
         for ticker, df in stocks_data.items():
             try:
@@ -284,7 +284,7 @@ class TrendDetector:
                         signal_type=signal_type,
                         message=message
                     ))
-                    logger.info(f"✅ Scan A: {ticker} - Trend Structure confirmed")
+
                 
                 # Scan B - Volume Expansion
                 if scan_conditions['scan_b_volume_expansion']:
@@ -298,14 +298,14 @@ class TrendDetector:
                         signal_type=signal_type,
                         message=message
                     ))
-                    logger.info(f"✅ Scan B: {ticker} - Volume Expansion confirmed")
+
                 
                 # Intersection - both scans passed
                 if scan_conditions['scan_a_trend_structure'] and scan_conditions['scan_b_volume_expansion']:
                     if not already_alerted:
                         self.alerted_today.add(ticker)
                     
-                    logger.info(f"✅ INTERSECTION: {ticker} - Passes BOTH scans!")
+
                     
             except Exception as e:
                 logger.error(f"Error analyzing {ticker}: {str(e)}")
@@ -329,9 +329,7 @@ class TrendDetector:
                 s.message = "🎯 INTERSECTION: Passes BOTH Trend Structure & Volume Expansion"
                 unique_intersection.append(s)
         
-        logger.info(f"Scan A (Trend Structure): {len(scan_a_signals)} stocks")
-        logger.info(f"Scan B (Volume Expansion): {len(scan_b_signals)} stocks")
-        logger.info(f"Intersection (Both): {len(unique_intersection)} stocks")
+
         
         return ScanResult(
             scan_a=scan_a_signals,
@@ -362,7 +360,7 @@ class TrendDetector:
         if self.last_reset_date != today:
             self.alerted_today.clear()
             self.last_reset_date = today
-            logger.info("Reset alerted_today set for new trading day")
+
     
     def get_alert_count(self) -> int:
         """

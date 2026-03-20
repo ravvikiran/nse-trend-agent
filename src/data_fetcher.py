@@ -39,13 +39,16 @@ class DataFetcher:
         Fetch historical data for a single stock.
         
         Args:
-            ticker: Stock ticker symbol (e.g., 'RELIANCE.NS')
+            ticker: Stock ticker symbol (e.g., 'RELIANCE')
             
         Returns:
             DataFrame with OHLCV data or None if fetch fails
         """
+        # Add .NS suffix for NSE stocks
+        nse_ticker = f"{ticker}.NS" if not ticker.endswith('.NS') else ticker
+        
         try:
-            stock = yf.Ticker(ticker)
+            stock = yf.Ticker(nse_ticker)
             df = stock.history(
                 period=f"{self.period}d",
                 interval=self.interval,
@@ -65,14 +68,14 @@ class DataFetcher:
             # Add ticker column for reference
             df['ticker'] = ticker
             
-            logger.debug(f"Fetched {len(df)} candles for {ticker}")
+            logger.debug(f"Fetched {len(df)} candles for {nse_ticker}")
             return df
             
         except Exception as e:
-            logger.error(f"Error fetching data for {ticker}: {str(e)}")
+            # Silently handle errors to avoid logging noise
             return None
     
-    def fetch_multiple_stocks(self, tickers: list, max_workers: int = 10) -> Dict[str, pd.DataFrame]:
+    def fetch_multiple_stocks(self, tickers: list, max_workers: int = 3) -> Dict[str, pd.DataFrame]:
         """
         Fetch data for multiple stocks.
         
@@ -87,7 +90,7 @@ class DataFetcher:
         
         results = {}
         
-        logger.info(f"Fetching data for {len(tickers)} stocks...")
+        logger.debug(f"Fetching data for {len(tickers)} stocks...")
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_ticker = {
@@ -104,7 +107,7 @@ class DataFetcher:
                 except Exception as e:
                     logger.error(f"Error processing {ticker}: {str(e)}")
         
-        logger.info(f"Successfully fetched data for {len(results)}/{len(tickers)} stocks")
+        logger.debug(f"Successfully fetched data for {len(results)}/{len(tickers)} stocks")
         return results
     
     def is_market_open(self) -> bool:

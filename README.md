@@ -72,11 +72,39 @@ The stock list is configured in [`config/stocks.json`](config/stocks.json). You 
 ### Start Scanner (Runs every 15 minutes during market hours)
 
 ```bash
-# Start the scanner
+# Start the scanner with all strategies
 python -m src.main
 
 # Test run (single scan)
 python -m src.main --test
+```
+
+### Run Specific Strategy Separately
+
+You can run each strategy independently:
+
+```bash
+# Run ONLY Trend Detection strategy
+python -m src.main --strategy trend
+
+# Run ONLY VERC (Volume Expansion Range Compression) strategy
+python -m src.main --strategy verc
+
+# Run both strategies (default)
+python -m src.main --strategy all
+```
+
+#### Examples:
+
+```bash
+# Test run with only VERC strategy
+python -m src.main --test --strategy verc
+
+# Test run with only Trend strategy
+python -m src.main --test --strategy trend
+
+# Start scanner with only VERC running in background
+python -m src.main --strategy verc
 ```
 
 ### Example Alert Message
