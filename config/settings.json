@@ -1,7 +1,7 @@
 {
     "telegram": {
-        "bot_token": "8783468830:AAEkAid5JtrC5tEtcdJ1JKMY3uk1rem_4OM",
-        "chat_id": "647296254"
+        "bot_token": "",
+        "chat_id": ""
     },
     "scanner": {
         "timeframe": "1D",

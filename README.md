@@ -5,12 +5,13 @@ Automated trading scanner that monitors ~500 NSE stocks during market hours and 
 ## Features
 
 - **Stock Universe**: Monitors 500+ NSE stocks (NIFTY 50, NEXT 50, MIDCAP 150, SMALLCAP 250)
-- **Real-time Data**: Uses Yahoo Finance for 15-minute OHLCV data
+- **Real-time Data**: Uses Yahoo Finance for 1-day (1D) OHLCV data
 - **Technical Indicators**: EMA 20, 50, 100, 200 + Volume MA 30
 - **Trend Detection**: Identifies EMA alignment (EMA20 > EMA50 > EMA100 > EMA200) with volume confirmation
 - **VERC Strategy**: Volume Expansion Range Compression - detects accumulation before breakout
 - **Smart Alerts**: Telegram notifications with entry, stop loss, targets, and confidence score
 - **Scheduled Scanning**: Runs every 15 minutes during market hours (09:15 - 15:30 IST)
+- **Timeframe**: Uses 1-day (1D) data for trend detection
 
 ## Installation
 
@@ -325,7 +326,7 @@ Factors:
 
 📌 Stock: HDFCBANK
 ⏰ Time: 2024-01-15 10:30:00
-📊 Timeframe: 15m
+📊 Timeframe: 1D
 
 Signal Type: 🎯 New Uptrend Starting
 

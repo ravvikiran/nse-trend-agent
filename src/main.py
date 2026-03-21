@@ -252,7 +252,7 @@ class NSETrendScanner:
             "",
             f"Stock: {signal.ticker}",
             f"Time: {now.strftime('%Y-%m-%d %H:%M')} IST",
-            f"Timeframe: 15m",
+            f"Timeframe: 1D",
             "",
             f"💰 Price: ₹{current_price:.2f}",
             "",
@@ -300,7 +300,7 @@ class NSETrendScanner:
             "",
             f"Stock: {signal.stock_symbol}",
             f"Time: {now.strftime('%Y-%m-%d %H:%M')} IST",
-            f"Timeframe: 15m",
+            f"Timeframe: 1D",
             "",
             f"💰 Current Price: ₹{signal.current_price:.2f}",
             "",
@@ -350,7 +350,7 @@ class NSETrendScanner:
         message = (
             "📊 Daily Scan Complete\n"
             f"Time: {now.strftime('%Y-%m-%d %H:%M')}\n"
-            f"Timeframe: 15m\n"
+            f"Timeframe: 1D\n"
             "\n"
             "No signals today.\n"
             "Markets may be consolidating."
@@ -427,7 +427,7 @@ class NSETrendScanner:
         self.alert_service.send_system_status(
             f"🚀 NSE Trend Scanner Agent Started\n"
             f"• Monitoring {len(self.stocks)} stocks\n"
-            f"• Timeframe: 15m\n"
+            f"• Timeframe: 1D\n"
             f"• Scan Interval: Every 15 min\n"
             f"• Market Hours: 09:15 - 15:30 IST\n"
             f"• Strategies: Trend + VERC\n"
