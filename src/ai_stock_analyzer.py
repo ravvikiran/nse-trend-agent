@@ -1,11 +1,13 @@
 """
-AI Stock Analyzer - Uses LLM to analyze stock trends and generate recommendations.
+AI Stock Analyzer - Multi-Provider LLM Support
+Automatically falls back to alternate providers if one is unavailable or quota-exhausted.
 """
 
 import os
 import logging
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
+from abc import ABC, abstractmethod
 
 logger = logging.getLogger(__name__)
 
@@ -107,126 +109,294 @@ REASON: [One line reasoning]
 ```"""
 
 
-class AIStockAnalyzer:
-    """AI-powered stock analyzer using LLM."""
+class BaseLLMProvider(ABC):
+    """Base class for LLM providers."""
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o-mini"):
-        """
-        Initialize the AI stock analyzer.
-        
-        Args:
-            api_key: OpenAI API key (defaults to env var)
-            model: Model to use for analysis
-        """
+    def __init__(self, name: str):
+        self.name = name
+        self.client = None
+    
+    @abstractmethod
+    def is_available(self) -> bool:
+        """Check if this provider is available."""
+        pass
+    
+    @abstractmethod
+    def generate(self, messages: List[Dict], **kwargs) -> str:
+        """Generate a response."""
+        pass
+
+
+class OpenAIProvider(BaseLLMProvider):
+    """OpenAI GPT provider."""
+    
+    def __init__(self, api_key: str = None, model: str = "gpt-4o-mini"):
+        super().__init__("OpenAI")
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self.model = model
         self.client = None
-        
+        self._init_client()
+    
+    def _init_client(self):
         if self.api_key:
             try:
                 from openai import OpenAI
                 self.client = OpenAI(api_key=self.api_key)
-                logger.info(f"AI Analyzer initialized with model: {model}")
             except ImportError:
                 logger.warning("OpenAI package not installed")
-        else:
-            logger.warning("No OpenAI API key provided")
     
     def is_available(self) -> bool:
-        """Check if AI analyzer is available."""
-        return self.client is not None
+        return self.client is not None and bool(self.api_key)
+    
+    def generate(self, messages: List[Dict], **kwargs) -> str:
+        if not self.is_available():
+            raise Exception("OpenAI not available")
+        
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=kwargs.get("temperature", 0.7),
+            max_tokens=kwargs.get("max_tokens", 1000)
+        )
+        return response.choices[0].message.content
+
+
+class AnthropicProvider(BaseLLMProvider):
+    """Anthropic Claude provider."""
+    
+    def __init__(self, api_key: str = None, model: str = "claude-3-haiku-20240307"):
+        super().__init__("Anthropic")
+        self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        self.model = model
+        self.client = None
+        self._init_client()
+    
+    def _init_client(self):
+        if self.api_key:
+            try:
+                from anthropic import Anthropic
+                self.client = Anthropic(api_key=self.api_key)
+            except ImportError:
+                logger.warning("Anthropic package not installed")
+    
+    def is_available(self) -> bool:
+        return self.client is not None and bool(self.api_key)
+    
+    def generate(self, messages: List[Dict], **kwargs) -> str:
+        if not self.is_available():
+            raise Exception("Anthropic not available")
+        
+        # Convert messages format
+        system = ""
+        user_messages = []
+        for msg in messages:
+            if msg["role"] == "system":
+                system = msg["content"]
+            else:
+                user_messages.append(msg)
+        
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=kwargs.get("max_tokens", 1000),
+            system=system,
+            messages=user_messages
+        )
+        return response.content[0].text
+
+
+class GoogleGeminiProvider(BaseLLMProvider):
+    """Google Gemini provider."""
+    
+    def __init__(self, api_key: str = None, model: str = "gemini-1.5-flash"):
+        super().__init__("Google Gemini")
+        self.api_key = api_key or os.environ.get("GOOGLE_API_KEY")
+        self.model = model
+        self.client = None
+        self._init_client()
+    
+    def _init_client(self):
+        if self.api_key:
+            try:
+                import google.generativeai as genai
+                genai.configure(api_key=self.api_key)
+                self.client = genai
+            except ImportError:
+                logger.warning("Google GenerativeAI package not installed")
+    
+    def is_available(self) -> bool:
+        return self.client is not None and bool(self.api_key)
+    
+    def generate(self, messages: List[Dict], **kwargs) -> str:
+        if not self.is_available():
+            raise Exception("Google Gemini not available")
+        
+        # Convert messages format
+        prompt = ""
+        for msg in messages:
+            if msg["role"] == "system":
+                prompt = msg["content"] + "\n\n"
+            else:
+                prompt += msg["content"]
+        
+        model = self.client.GenerativeModel(self.model)
+        response = model.generate_content(prompt)
+        return response.text
+
+
+class GroqProvider(BaseLLMProvider):
+    """Groq provider (fast inference, free tier available)."""
+    
+    def __init__(self, api_key: str = None, model: str = "llama-3.1-70b-versatile"):
+        super().__init__("Groq")
+        self.api_key = api_key or os.environ.get("GROQ_API_KEY")
+        self.model = model
+        self.client = None
+        self._init_client()
+    
+    def _init_client(self):
+        if self.api_key:
+            try:
+                from groq import Groq
+                self.client = Groq(api_key=self.api_key)
+            except ImportError:
+                logger.warning("Groq package not installed")
+    
+    def is_available(self) -> bool:
+        return self.client is not None and bool(self.api_key)
+    
+    def generate(self, messages: List[Dict], **kwargs) -> str:
+        if not self.is_available():
+            raise Exception("Groq not available")
+        
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=kwargs.get("temperature", 0.7),
+            max_tokens=kwargs.get("max_tokens", 1000)
+        )
+        return response.choices[0].message.content
+
+
+class MultiProviderAIAnalyzer:
+    """
+    Multi-provider AI analyzer with automatic fallback.
+    Tries providers in order until one succeeds.
+    """
+    
+    def __init__(self):
+        self.providers: List[BaseLLMProvider] = []
+        self._init_providers()
+    
+    def _init_providers(self):
+        """Initialize all available providers."""
+        # Initialize providers based on available API keys
+        
+        # OpenAI (default)
+        openai_key = os.environ.get("OPENAI_API_KEY")
+        openai_model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+        if openai_key:
+            self.providers.append(OpenAIProvider(openai_key, openai_model))
+            logger.info("OpenAI provider initialized")
+        
+        # Groq (free tier available)
+        groq_key = os.environ.get("GROQ_API_KEY")
+        groq_model = os.environ.get("GROQ_MODEL", "llama-3.1-70b-versatile")
+        if groq_key:
+            self.providers.append(GroqProvider(groq_key, groq_model))
+            logger.info("Groq provider initialized")
+        
+        # Anthropic
+        anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+        anthropic_model = os.environ.get("ANTHROPIC_MODEL", "claude-3-haiku-20240307")
+        if anthropic_key:
+            self.providers.append(AnthropicProvider(anthropic_key, anthropic_model))
+            logger.info("Anthropic provider initialized")
+        
+        # Google Gemini
+        google_key = os.environ.get("GOOGLE_API_KEY")
+        google_model = os.environ.get("GOOGLE_MODEL", "gemini-1.5-flash")
+        if google_key:
+            self.providers.append(GoogleGeminiProvider(google_key, google_model))
+            logger.info("Google Gemini provider initialized")
+        
+        logger.info(f"Initialized {len(self.providers)} AI providers")
+    
+    def is_available(self) -> bool:
+        """Check if any provider is available."""
+        return len(self.providers) > 0
+    
+    def get_available_providers(self) -> List[str]:
+        """Get list of available provider names."""
+        return [p.name for p in self.providers if p.is_available()]
     
     def analyze_stock(self, symbol: str, market_data: Dict[str, Any]) -> str:
         """
-        Analyze a stock and return recommendation.
-        
-        Args:
-            symbol: Stock symbol (e.g., "RELIANCE")
-            market_data: Dictionary containing all market data
-            
-        Returns:
-            Formatted analysis string
+        Analyze a stock using available providers.
+        Automatically falls back if one provider fails.
         """
         if not self.is_available():
-            return "❌ AI Analysis unavailable. Please configure OPENAI_API_KEY."
+            return "❌ No AI providers available. Please configure at least one API key."
         
-        try:
-            # Prepare the prompt with market data
-            prompt = self._prepare_analysis_prompt(symbol, market_data)
-            
-            # Call the LLM
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7,
-                max_tokens=1000
-            )
-            
-            return response.choices[0].message.content
-            
-        except Exception as e:
-            logger.error(f"Error analyzing stock {symbol}: {e}")
-            return f"❌ Error analyzing stock: {str(e)}"
+        # Prepare the prompt
+        prompt = self._prepare_analysis_prompt(symbol, market_data)
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt}
+        ]
+        
+        # Try each provider in order
+        errors = []
+        for provider in self.providers:
+            try:
+                if provider.is_available():
+                    logger.info(f"Trying {provider.name} for analysis...")
+                    result = provider.generate(messages)
+                    logger.info(f"Successfully used {provider.name}")
+                    return result
+            except Exception as e:
+                error_msg = f"{provider.name}: {str(e)}"
+                errors.append(error_msg)
+                logger.warning(f"{provider.name} failed: {e}")
+                continue
+        
+        # All providers failed - sanitize error message for user safety
+        return "❌ All AI providers failed. Please check your API keys and quotas."
     
-    def quick_analyze(self, symbol: str, price: float, ema20: float, ema50: float, 
+    def quick_analyze(self, symbol: str, price: float, ema20: float, ema50: float,
                       ema100: float, ema200: float, vol_ratio: float, rsi: float) -> str:
-        """
-        Quick analysis with minimal data.
-        
-        Args:
-            symbol: Stock symbol
-            price: Current price
-            ema20-ema200: EMA values
-            vol_ratio: Volume ratio
-            rsi: RSI value
-            
-        Returns:
-            Quick recommendation
-        """
+        """Quick analysis with minimal data."""
         if not self.is_available():
-            return "❌ AI Analysis unavailable. Please configure OPENAI_API_KEY."
+            return "❌ No AI providers available. Please configure at least one API key."
         
-        try:
-            prompt = QUICK_ANALYSIS_PROMPT.format(
-                symbol=symbol,
-                price=price,
-                ema20=ema20,
-                ema50=ema50,
-                ema100=ema100,
-                ema200=ema200,
-                vol_ratio=vol_ratio,
-                rsi=rsi
-            )
-            
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are a concise stock market analyst."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7,
-                max_tokens=200
-            )
-            
-            return response.choices[0].message.content
-            
-        except Exception as e:
-            logger.error(f"Error in quick analysis for {symbol}: {e}")
-            return f"❌ Error: {str(e)}"
+        prompt = QUICK_ANALYSIS_PROMPT.format(
+            symbol=symbol, price=price, ema20=ema20, ema50=ema50,
+            ema100=ema100, ema200=ema200, vol_ratio=vol_ratio, rsi=rsi
+        )
+        
+        messages = [
+            {"role": "system", "content": "You are a concise stock market analyst."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        # Try each provider
+        for provider in self.providers:
+            try:
+                if provider.is_available():
+                    return provider.generate(messages, max_tokens=200)
+            except Exception as e:
+                logger.warning(f"{provider.name} failed: {e}")
+                continue
+        
+        return "❌ All AI providers failed"
     
     def _prepare_analysis_prompt(self, symbol: str, data: Dict[str, Any]) -> str:
         """Prepare the full analysis prompt with market data."""
         
-        # Format recent candles
         recent_candles = ""
         if 'recent_candles' in data:
             for i, candle in enumerate(data['recent_candles'][-5:]):
                 recent_candles += f"- Day {i+1}: O:{candle.get('open', 'N/A')} H:{candle.get('high', 'N/A')} L:{candle.get('low', 'N/A')} C:{candle.get('close', 'N/A')} V:{candle.get('volume', 0):,}\n"
         
-        # Calculate entry/stop/target defaults
         current_price = data.get('current_price', 0)
         ema50 = data.get('ema50', current_price)
         
@@ -273,8 +443,10 @@ class AIStockAnalyzer:
         )
 
 
-def create_analyzer() -> AIStockAnalyzer:
-    """Factory function to create AI analyzer."""
-    api_key = os.environ.get("OPENAI_API_KEY")
-    model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-    return AIStockAnalyzer(api_key=api_key, model=model)
+# Backward compatibility - keep the old class name
+AIStockAnalyzer = MultiProviderAIAnalyzer
+
+
+def create_analyzer() -> MultiProviderAIAnalyzer:
+    """Factory function to create the multi-provider AI analyzer."""
+    return MultiProviderAIAnalyzer()
