@@ -1,16 +1,18 @@
 # NSE Trend Scanner Agent
 
-Automated trading scanner that monitors ~500 NSE stocks during market hours and detects potential uptrend starts based on EMA alignment and volume confirmation.
+Automated trading scanner that monitors ~500 NSE stocks during market hours and detects potential uptrend starts based on EMA alignment and volume confirmation. Includes AI-powered stock analysis via two-way Telegram bot.
 
 ## Features
 
 - **Stock Universe**: Monitors 500+ NSE stocks (NIFTY 50, NEXT 50, MIDCAP 150, SMALLCAP 250)
 - **Real-time Data**: Uses Yahoo Finance for 1-day (1D) OHLCV data
-- **Technical Indicators**: EMA 20, 50, 100, 200 + Volume MA 30
+- **Technical Indicators**: EMA 20, 50, 100, 200 + Volume MA 30 + RSI + ATR
 - **Trend Detection**: Identifies EMA alignment (EMA20 > EMA50 > EMA100 > EMA200) with volume confirmation
 - **VERC Strategy**: Volume Expansion Range Compression - detects accumulation before breakout
 - **Smart Alerts**: Telegram notifications with entry, stop loss, targets, and confidence score
 - **Scheduled Scanning**: Runs every 15 minutes during market hours (09:15 - 15:30 IST)
+- **AI Analysis**: GPT-powered stock analysis with BUY/SELL/HOLD recommendations
+- **Two-way Telegram Bot**: Interactive bot - send stock symbols for instant analysis
 - **Timeframe**: Uses 1-day (1D) data for trend detection
 
 ## Installation
@@ -68,6 +70,33 @@ The stock list is configured in [`config/stocks.json`](config/stocks.json). You 
 ["RELIANCE.NS", "HDFCBANK.NS", "TCS.NS"]
 ```
 
+### 3. AI Configuration (Optional)
+
+To enable AI-powered stock analysis, you need an OpenAI API key:
+
+**Get API Key:**
+1. Go to https://platform.openai.com/api-keys
+2. Create a new API key
+3. Copy it (it won't be shown again)
+
+**Set Environment Variable:**
+
+```bash
+# On Linux/Mac
+export OPENAI_API_KEY=sk-your-api-key-here
+
+# On Windows
+set OPENAI_API_KEY=sk-your-api-key-here
+```
+
+**Optional: Change Model**
+
+Default model is `gpt-4o-mini`. To use a different model:
+
+```bash
+export OPENAI_MODEL=gpt-4o
+```
+
 ## Usage
 
 ### Start Scanner (Runs every 15 minutes during market hours)
@@ -107,6 +136,33 @@ python -m src.main --test --strategy trend
 # Start scanner with only VERC running in background
 python -m src.main --strategy verc
 ```
+
+### Enable Two-Way Telegram Bot
+
+To enable the interactive Telegram bot for stock analysis:
+
+```bash
+# Start scanner with Telegram bot enabled
+python -m src.main --enable-telegram-bot
+
+# With AI analysis (requires OPENAI_API_KEY)
+export OPENAI_API_KEY=your-key
+python -m src.main --enable-telegram-bot
+```
+
+### Telegram Bot Commands
+
+When the bot is enabled, you can interact with it in Telegram:
+
+| Command | Description |
+|---------|-------------|
+| `RELIANCE` | Send stock symbol for instant AI analysis |
+| `/analyze RELIANCE` | AI-powered stock analysis with entry/stop/targets |
+| `/trend HDFCBANK` | Technical trend analysis (no AI) |
+| `/status` | Check scanner status |
+| `/help` | Show help message |
+
+**Note:** The bot will only respond to the configured chat ID.
 
 ### Example Alert Message
 
@@ -379,7 +435,8 @@ The system maintains an in-memory set (`alerted_today`) to prevent duplicate ale
 - Multi-timeframe confirmation (15m + 1h + daily)
 - RSI momentum filter
 - Relative volume spikes
-- AI-based trend strength analysis
+- ✅ AI-based trend strength analysis *(Implemented)*
+- ✅ Two-way Telegram bot *(Implemented)*
 - Web dashboard for signal history
 - Backtesting engine
 - VPS deployment for 24/7 reliability

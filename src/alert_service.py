@@ -2,13 +2,16 @@
 Alert Service Module
 
 Sends Telegram alerts when trend signals are detected.
+Supports two-way communication for stock analysis requests.
 """
 
 import logging
 import requests
-from typing import Optional, Dict, Any, List
+import threading
+from typing import Optional, Dict, Any, List, Callable
 from datetime import datetime
 from src.trend_detector import TrendSignal
+from src.ai_stock_analyzer import create_analyzer, AIStockAnalyzer
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -299,3 +302,394 @@ class MockAlertService(AlertService):
     def clear_messages(self):
         """Clear sent messages."""
         self.sent_messages.clear()
+
+
+class TelegramBotHandler:
+    """
+    Telegram Bot handler for two-way communication.
+    Processes incoming messages and provides stock analysis.
+    """
+    
+    def __init__(self, bot_token: str, chat_id: str, data_fetcher=None, ai_analyzer: AIStockAnalyzer = None):
+        """
+        Initialize the Telegram bot handler.
+        
+        Args:
+            bot_token: Telegram bot token
+            chat_id: Authorized chat ID for commands
+            data_fetcher: DataFetcher instance for getting stock data
+            ai_analyzer: AIStockAnalyzer instance for AI analysis
+        """
+        self.bot_token = bot_token
+        self.chat_id = chat_id
+        self.api_url = f"https://api.telegram.org/bot{bot_token}"
+        self.data_fetcher = data_fetcher
+        self.ai_analyzer = ai_analyzer or create_analyzer()
+        self.running = False
+        
+        # Command handlers
+        self.commands = {
+            '/start': self._cmd_start,
+            '/help': self._cmd_help,
+            '/analyze': self._cmd_analyze,
+            '/ai': self._cmd_ai_analysis,
+            '/trend': self._cmd_trend,
+            '/status': self._cmd_status,
+        }
+    
+    def _send_message(self, text: str, chat_id: str = None) -> bool:
+        """Send a message to Telegram."""
+        target_chat = chat_id or self.chat_id
+        try:
+            url = f"{self.api_url}/sendMessage"
+            payload = {
+                "chat_id": target_chat,
+                "text": text,
+                "parse_mode": "Markdown"
+            }
+            response = requests.post(url, json=payload, timeout=30)
+            return response.status_code == 200
+        except Exception as e:
+            logging.error(f"Error sending message: {e}")
+            return False
+    
+    def _cmd_start(self, chat_id: str) -> str:
+        """Handle /start command."""
+        return """🎉 *Welcome to NSE Trend Scanner Bot!*
+
+I scan NSE stocks for trend and VERC signals.
+
+*Available Commands:*
+• /analyze [STOCK] - Get AI-powered stock analysis
+• /trend [STOCK] - Get trend analysis
+• /status - Check scanner status
+• /help - Show this help message
+
+*Quick Analysis:*
+Just send me a stock symbol (e.g., `RELIANCE` or `RELIANCE.NS`) and I'll analyze it!"""
+
+    def _cmd_help(self, chat_id: str) -> str:
+        """Handle /help command."""
+        return """📖 *Help*
+
+*Commands:*
+• `/analyze RELIANCE` - AI analysis of a stock
+• `/trend HDFCBANK` - Technical trend analysis
+• `/status` - Scanner status
+
+*Quick Usage:*
+Just type a stock symbol to get instant analysis!"""
+
+    def _cmd_status(self, chat_id: str) -> str:
+        """Handle /status command."""
+        ai_status = "✅ Available" if self.ai_analyzer.is_available() else "❌ Not configured"
+        data_status = "✅ Connected" if self.data_fetcher else "❌ Not available"
+        
+        return f"""📊 *Scanner Status*
+
+AI Analysis: {ai_status}
+Data Feed: {data_status}
+Bot: Running"""
+
+    async def _cmd_analyze(self, args: str, chat_id: str) -> str:
+        """Handle /analyze command - AI-powered stock analysis."""
+        symbol = args.strip().upper() if args else None
+        
+        if not symbol:
+            return "⚠️ Please provide a stock symbol. Example: `/analyze RELIANCE`"
+        
+        # Normalize symbol
+        if not symbol.endswith('.NS'):
+            symbol = f"{symbol}.NS"
+        
+        # Send thinking message
+        self._send_message("🤔 Analyzing...", chat_id)
+        
+        # Get stock data
+        try:
+            if self.data_fetcher:
+                df = self.data_fetcher.fetch_stock_data(symbol, period="3mo")
+                if df is None or df.empty:
+                    return f"❌ Could not fetch data for {symbol}"
+                
+                # Prepare market data
+                market_data = self._prepare_market_data(df, symbol)
+                
+                # Get AI analysis
+                if self.ai_analyzer.is_available():
+                    analysis = self.ai_analyzer.analyze_stock(symbol.replace('.NS', ''), market_data)
+                    return f"📈 *AI Analysis: {symbol.replace('.NS', '')}*\n\n{analysis}"
+                else:
+                    # Fall back to basic analysis
+                    return self._basic_analysis(df, symbol.replace('.NS', ''))
+            else:
+                return "❌ Data fetcher not available"
+                
+        except Exception as e:
+            logging.error(f"Error analyzing stock {symbol}: {e}")
+            return f"❌ Error analyzing {symbol}: {str(e)}"
+
+    async def _cmd_ai_analysis(self, args: str, chat_id: str) -> str:
+        """Alias for /analyze command."""
+        return await self._cmd_analyze(args, chat_id)
+
+    def _cmd_trend(self, args: str, chat_id: str) -> str:
+        """Handle /trend command - Basic trend analysis."""
+        symbol = args.strip().upper() if args else None
+        
+        if not symbol:
+            return "⚠️ Please provide a stock symbol. Example: `/trend RELIANCE`"
+        
+        # Normalize symbol
+        if not symbol.endswith('.NS'):
+            symbol = f"{symbol}.NS"
+        
+        try:
+            if self.data_fetcher:
+                df = self.data_fetcher.fetch_stock_data(symbol, period="1mo")
+                if df is None or df.empty:
+                    return f"❌ Could not fetch data for {symbol}"
+                
+                return self._basic_analysis(df, symbol.replace('.NS', ''))
+            else:
+                return "❌ Data fetcher not available"
+                
+        except Exception as e:
+            return f"❌ Error: {str(e)}"
+
+    def _prepare_market_data(self, df, symbol: str) -> Dict[str, Any]:
+        """Prepare market data for AI analysis."""
+        import pandas as pd
+        import pytz
+        
+        # Get latest data
+        latest = df.iloc[-1]
+        
+        # Calculate EMAs
+        ema20 = df['close'].ewm(span=20).mean().iloc[-1]
+        ema50 = df['close'].ewm(span=50).mean().iloc[-1]
+        ema100 = df['close'].ewm(span=100).mean().iloc[-1]
+        ema200 = df['close'].ewm(span=200).mean().iloc[-1] if len(df) >= 200 else ema100
+        
+        # Calculate RSI
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        rsi = (100 - (100 / (1 + rs))).iloc[-1]
+        
+        # Calculate ATR
+        high_low = df['high'] - df['low']
+        high_close = abs(df['high'] - df['close'].shift())
+        low_close = abs(df['low'] - df['close'].shift())
+        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        atr = tr.rolling(14).mean().iloc[-1]
+        
+        # Volume analysis
+        volume_ma30 = df['volume'].rolling(30).mean().iloc[-1]
+        volume_ratio = latest['volume'] / volume_30 if volume_30 > 0 else 0
+        
+        # EMA alignment score
+        ema_alignment_score = 0
+        if ema20 > ema50: ema_alignment_score += 1
+        if ema50 > ema100: ema_alignment_score += 1
+        if ema100 > ema200: ema_alignment_score += 1
+        
+        # Trend direction
+        if ema_alignment_score >= 3:
+            trend = "Strong Uptrend"
+        elif ema_alignment_score >= 2:
+            trend = "Weak Uptrend"
+        elif ema_alignment_score <= 1:
+            trend = "Downtrend"
+        else:
+            trend = "Sideways"
+        
+        # Recent candles
+        recent_candles = []
+        for i, row in df.tail(5).iterrows():
+            recent_candles.append({
+                'open': row['open'],
+                'high': row['high'],
+                'low': row['low'],
+                'close': row['close'],
+                'volume': row['volume']
+            })
+        
+        return {
+            'current_price': latest['close'],
+            'open': latest['open'],
+            'high': latest['high'],
+            'low': latest['low'],
+            'volume': latest['volume'],
+            'ema20': ema20,
+            'ema50': ema50,
+            'ema100': ema100,
+            'ema200': ema200,
+            'rsi': rsi,
+            'atr': atr,
+            'volume_ma30': volume_ma30,
+            'volume_ratio': volume_ratio,
+            'ema_alignment_score': ema_alignment_score,
+            'trend_direction': trend,
+            'recent_candles': recent_candles,
+            'nifty_trend': 'Sideways',  # Default - would need Nifty data
+            'sector_performance': 'Unknown'
+        }
+
+    def _basic_analysis(self, df, symbol: str) -> str:
+        """Basic technical analysis without AI."""
+        import pandas as pd
+        
+        latest = df.iloc[-1]
+        
+        # Calculate EMAs
+        ema20 = df['close'].ewm(span=20).mean().iloc[-1]
+        ema50 = df['close'].ewm(span=50).mean().iloc[-1]
+        ema100 = df['close'].ewm(span=100).mean().iloc[-1]
+        
+        # Calculate RSI
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        rsi = (100 - (100 / (1 + rs))).iloc[-1]
+        
+        # Determine trend
+        if ema20 > ema50 > ema100:
+            trend = "🟢 Bullish"
+            rec = "BUY"
+        elif ema20 < ema50 < ema100:
+            trend = "🔴 Bearish"
+            rec = "SELL"
+        else:
+            trend = "🟡 Sideways"
+            rec = "HOLD"
+        
+        # RSI interpretation
+        if rsi > 70:
+            rsi_status = "Overbought"
+        elif rsi < 30:
+            rsi_status = "Oversold"
+        else:
+            rsi_status = "Neutral"
+        
+        return f"""📊 *Trend Analysis: {symbol}*
+
+*Price:* ₹{latest['close']:.2f}
+*Trend:* {trend}
+*RSI (14):* {rsi:.1f} ({rsi_status})
+
+*EMAs:*
+• EMA 20: ₹{ema20:.2f}
+• EMA 50: ₹{ema50:.2f}
+• EMA 100: ₹{ema100:.2f}
+
+*Recommendation:* {rec}"""
+
+    def process_message(self, message: Dict) -> Optional[str]:
+        """
+        Process incoming Telegram message.
+        
+        Args:
+            message: Telegram message dict
+            
+        Returns:
+            Response message or None
+        """
+        try:
+            # Extract message details
+            if 'message' not in message:
+                return None
+            
+            msg = message['message']
+            chat_id = str(msg['chat']['id'])
+            text = msg.get('text', '').strip()
+            
+            # Check authorization (only respond to authorized chat_id)
+            if chat_id != self.chat_id:
+                return None
+            
+            # Handle commands
+            if text.startswith('/'):
+                parts = text.split(' ', 1)
+                cmd = parts[0].lower()
+                args = parts[1] if len(parts) > 1 else ''
+                
+                if cmd in self.commands:
+                    # Handle async commands
+                    import asyncio
+                    if asyncio.iscoroutinefunction(self.commands[cmd]):
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            return loop.run_until_complete(self.commands[cmd](args, chat_id))
+                        finally:
+                            loop.close()
+                    else:
+                        return self.commands[cmd](args, chat_id)
+                else:
+                    return f"Unknown command: {cmd}. Type /help for available commands."
+            
+            # Handle plain text (stock symbol)
+            else:
+                # Treat as stock symbol
+                return self._handle_stock_query(text, chat_id)
+                
+        except Exception as e:
+            logging.error(f"Error processing message: {e}")
+            return f"Error processing request: {str(e)}"
+    
+    def _handle_stock_query(self, text: str, chat_id: str) -> str:
+        """Handle plain text as stock symbol query."""
+        symbol = text.strip().upper()
+        
+        # Run analysis
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(self._cmd_analyze(symbol, chat_id))
+        finally:
+            loop.close()
+
+    def start_polling(self):
+        """Start polling for messages (simple implementation)."""
+        self.running = True
+        last_update_id = 0
+        
+        while self.running:
+            try:
+                # Get updates
+                url = f"{self.api_url}/getUpdates"
+                params = {
+                    'timeout': 30,
+                    'offset': last_update_id + 1
+                }
+                
+                response = requests.get(url, params=params, timeout=35)
+                if response.status_code == 200:
+                    updates = response.json().get('result', [])
+                    
+                    for update in updates:
+                        last_update_id = update['update_id']
+                        
+                        if 'message' in update:
+                            response_text = self.process_message(update)
+                            if response_text:
+                                self._send_message(response_text)
+                                
+            except Exception as e:
+                logging.error(f"Polling error: {e}")
+                import time
+                time.sleep(5)
+    
+    def start_background(self):
+        """Start polling in background thread."""
+        thread = threading.Thread(target=self.start_polling, daemon=True)
+        thread.start()
+        logging.info("Telegram bot handler started in background")
+    
+    def stop(self):
+        """Stop the bot."""
+        self.running = False

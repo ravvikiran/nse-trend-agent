@@ -17,9 +17,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from data_fetcher import DataFetcher
 from indicator_engine import IndicatorEngine
 from trend_detector import TrendDetector
-from alert_service import AlertService
+from alert_service import AlertService, TelegramBotHandler
 from scheduler import MarketScheduler
 from volume_compression import scan_stocks as verc_scan_stocks
+from ai_stock_analyzer import create_analyzer
 
 
 def setup_logging(log_level='INFO', log_file='logs/scanner.log'):
@@ -47,11 +48,14 @@ class NSETrendScanner:
     """Main scanner class that coordinates all components."""
     
     def __init__(self, config_path='config/stocks.json', telegram_token=None, 
-                 telegram_chat_id=None, use_mock_alerts=False, strategy='all'):
+                 telegram_chat_id=None, use_mock_alerts=False, strategy='all',
+                 enable_telegram_bot=False):
         """Initialize the scanner with all components."""
         # Load configuration
         self.config_path = config_path
         self.strategy = strategy
+        self.telegram_token = telegram_token
+        self.telegram_chat_id = telegram_chat_id
         self._load_config()
         
         # Initialize components
@@ -65,6 +69,20 @@ class NSETrendScanner:
             self.alert_service = MockAlertService()
         else:
             self.alert_service = AlertService(telegram_token, telegram_chat_id)
+        
+        # Initialize AI analyzer
+        self.ai_analyzer = create_analyzer()
+        
+        # Initialize Telegram bot handler for two-way communication
+        self.telegram_bot = None
+        if enable_telegram_bot and telegram_token and telegram_chat_id:
+            self.telegram_bot = TelegramBotHandler(
+                bot_token=telegram_token,
+                chat_id=telegram_chat_id,
+                data_fetcher=self.data_fetcher,
+                ai_analyzer=self.ai_analyzer
+            )
+            logger.info("Telegram bot handler initialized for two-way communication")
         
         # Initialize scheduler
         self.scheduler = MarketScheduler()
@@ -423,6 +441,9 @@ class NSETrendScanner:
     def start(self):
         """Start the scanner with scheduled execution."""
         
+        # Check AI availability
+        ai_status = "✅" if self.ai_analyzer.is_available() else "❌"
+        
         # Send startup notification
         self.alert_service.send_system_status(
             f"🚀 NSE Trend Scanner Agent Started\n"
@@ -431,8 +452,22 @@ class NSETrendScanner:
             f"• Scan Interval: Every 15 min\n"
             f"• Market Hours: 09:15 - 15:30 IST\n"
             f"• Strategies: Trend + VERC\n"
-            f"• Max Signals: 2 per strategy"
+            f"• Max Signals: 2 per strategy\n"
+            f"• AI Analysis: {ai_status}\n"
+            f"• Telegram Bot: {'✅ Enabled' if self.telegram_bot else '❌ Disabled'}"
         )
+        
+        # Start Telegram bot handler for two-way communication
+        if self.telegram_bot:
+            self.telegram_bot.start_background()
+            self.alert_service.send_message(
+                "✅ *Telegram Bot Active!*\n\n"
+                "You can now:\n"
+                "• Send me a stock symbol (e.g., `RELIANCE`)\n"
+                "• Use /analyze RELIANCE for AI analysis\n"
+                "• Use /trend HDFCBANK for trend analysis\n"
+                "• Use /status to check scanner status"
+            )
         
         # Start scheduler
         self.scheduler.start()
@@ -526,6 +561,12 @@ def parse_arguments():
     )
     
     parser.add_argument(
+        '--enable-telegram-bot',
+        action='store_true',
+        help='Enable two-way Telegram bot for stock analysis requests'
+    )
+    
+    parser.add_argument(
         '--log-level',
         default='INFO',
         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
@@ -557,7 +598,8 @@ def main():
         telegram_token=args.telegram_token,
         telegram_chat_id=args.telegram_chat_id,
         use_mock_alerts=args.mock_alerts,
-        strategy=args.strategy
+        strategy=args.strategy,
+        enable_telegram_bot=args.enable_telegram_bot
     )
     
     # Handle test modes

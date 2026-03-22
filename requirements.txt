@@ -21,3 +21,6 @@ python-dotenv>=1.0.0
 
 # Date/Time utilities
 pytz>=2023.3
+
+# AI/LLM Integration
+openai>=1.0.0
