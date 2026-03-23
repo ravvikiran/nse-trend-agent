@@ -22,6 +22,13 @@ from scheduler import MarketScheduler
 from volume_compression import scan_stocks as verc_scan_stocks
 from ai_stock_analyzer import create_analyzer
 
+# New modules for Reasoning + Learning
+from reasoning_engine import create_reasoning_engine
+from history_manager import create_history_manager
+from signal_tracker import create_signal_tracker
+from performance_tracker import create_performance_tracker
+from notification_manager import create_notification_manager
+
 
 def setup_logging(log_level='INFO', log_file='logs/scanner.log'):
     """Setup logging configuration."""
@@ -88,6 +95,26 @@ class NSETrendScanner:
         self.scheduler = MarketScheduler()
         self.scheduler.scan_callback = self.scan
         
+        # ==================== NEW: Reasoning + Learning Components ====================
+        # History Manager - stores signal data
+        self.history_manager = create_history_manager()
+        
+        # Signal Tracker - monitors active signals
+        self.signal_tracker = create_signal_tracker(self.history_manager, self.data_fetcher)
+        
+        # Performance Tracker - calculates SIQ scores
+        self.performance_tracker = create_performance_tracker(self.history_manager)
+        
+        # Reasoning Engine - hybrid rule-based + AI reasoning
+        self.reasoning_engine = create_reasoning_engine()
+        
+        # Notification Manager - handles outcome alerts and reports
+        self.notification_manager = create_notification_manager(self.alert_service)
+        
+        # Signal tracking interval (check every N scans)
+        self.signal_check_interval = 4  # Check every 4th scan (~1 hour)
+        self.scan_count = 0
+        
         # Statistics
         self.total_scans = 0
         self.total_signals = 0
@@ -139,10 +166,12 @@ class NSETrendScanner:
         
         Steps:
         1. Fetch stock data
-        2. Run Trend Detection and VERC strategies
+        2. Run Trend Detection and VERC strategies with Reasoning Engine
         3. Send unified alerts with entry/stop loss/targets
+        4. Track signals for learning
         """
         self.total_scans += 1
+        self.scan_count += 1
         scan_start = datetime.now()
         
         try:
@@ -152,8 +181,12 @@ class NSETrendScanner:
             if not stocks_data:
                 return
             
-            # Step 2: Run both strategies
+            # Step 2: Run both strategies with Reasoning Engine
             self._run_all_strategies(stocks_data)
+            
+            # Step 3: Check active signals periodically
+            if self.scan_count % self.signal_check_interval == 0:
+                self._check_active_signals()
             
             # Update statistics
             self.last_scan_time = datetime.now()
@@ -187,6 +220,9 @@ class NSETrendScanner:
                     try:
                         alert = self._format_trend_alert(signal, stocks_data.get(signal.ticker))
                         all_alerts.append(alert)
+                        
+                        # Track signal for learning system
+                        self._track_trend_signal(signal)
                     except Exception:
                         pass
         
@@ -206,6 +242,9 @@ class NSETrendScanner:
                     try:
                         alert = self._format_verc_alert(signal, stocks_data.get(signal.stock_symbol))
                         all_alerts.append(alert)
+                        
+                        # Track signal for learning system
+                        self._track_verc_signal(signal)
                     except Exception:
                         pass
         
@@ -297,6 +336,23 @@ class NSETrendScanner:
         
         alert_lines.append(f"Confidence: {confidence}/10")
         
+        # Add reasoning info if available
+        reasoning_info = signal.reasoning if hasattr(signal, 'reasoning') else {}
+        if reasoning_info:
+            alert_lines.extend([
+                "",
+                "🧠 AI Reasoning:",
+                f"  Score: {reasoning_info.get('weighted_score', 'N/A')}",
+                f"  Factors: {', '.join(reasoning_info.get('factor_scores', {}).keys())}"
+            ])
+        
+        # Add tracking info
+        alert_lines.extend([
+            "",
+            f"📊 Signal ID: {signal.ticker}_{datetime.now().strftime('%Y%m%d%H%M%S')}",
+            "(This signal is now being tracked for outcome monitoring)"
+        ])
+        
         return "\n".join(alert_lines)
     
     def _format_verc_alert(self, signal, df=None):
@@ -348,6 +404,20 @@ class NSETrendScanner:
             ])
         
         alert_lines.append(f"Confidence: {signal.confidence_score}/10")
+        
+        # Add VERC-specific scoring
+        if hasattr(signal, 'verc_score'):
+            alert_lines.extend([
+                "",
+                f"📈 VERC Score: {signal.verc_score}/100"
+            ])
+        
+        # Add tracking info
+        alert_lines.extend([
+            "",
+            f"📊 Signal ID: {signal.stock_symbol}_{datetime.now().strftime('%Y%m%d%H%M%S')}",
+            "(This signal is now being tracked for outcome monitoring)"
+        ])
         
         return "\n".join(alert_lines)
     
@@ -438,6 +508,141 @@ class NSETrendScanner:
         else:
             return f"~{int(days_estimate/30)} months"
     
+    # ==================== NEW: Signal Tracking & Learning ====================
+    
+    def _check_active_signals(self):
+        """
+        Check all active signals for target/SL hits.
+        Sends notifications for completed signals.
+        """
+        try:
+            # Check all active signals
+            result = self.signal_tracker.check_all_active_signals()
+            
+            completed = result.get('completed', [])
+            still_active = result.get('still_active', [])
+            
+            if completed:
+                # Notify for each completed signal
+                for signal in completed:
+                    self.notification_manager.notify_signal_completed(signal)
+                
+                # Also send batch summary
+                self.notification_manager.notify_outcome_batch(completed)
+                
+                logger.info(f"Completed signals: {len(completed)}")
+            
+            # Log active signal status
+            if still_active:
+                logger.debug(f"Active signals: {len(still_active)}")
+                
+        except Exception as e:
+            logger.error(f"Error checking active signals: {e}")
+    
+    def _track_signal(self, signal_data: dict, signal_type: str):
+        """
+        Track a new signal in the learning system.
+        
+        Args:
+            signal_data: Signal information dict
+            signal_type: Type of signal (TREND, VERC, etc.)
+        """
+        try:
+            # Generate signal ID
+            import uuid
+            signal_id = f"{signal_type}_{signal_data.get('stock_symbol', 'UNKNOWN')}_{uuid.uuid4().hex[:8]}"
+            
+            # Build tracking data
+            tracking_data = {
+                'signal_id': signal_id,
+                'stock_symbol': signal_data.get('stock_symbol'),
+                'signal_type': signal_type,
+                'entry_price': signal_data.get('entry_price'),
+                'target_price': signal_data.get('target_price'),
+                'sl_price': signal_data.get('sl_price'),
+                'confidence_score': signal_data.get('confidence_score', 50),
+                'reasoning_data': signal_data.get('reasoning', {})
+            }
+            
+            # Add to active tracking
+            self.history_manager.add_active_signal(tracking_data)
+            
+            logger.info(f"Tracking signal: {signal_id} for {tracking_data.get('stock_symbol')}")
+            
+        except Exception as e:
+            logger.error(f"Error tracking signal: {e}")
+    
+    def _track_trend_signal(self, signal):
+        """
+        Track a Trend signal in the learning system.
+        
+        Args:
+            signal: TrendSignal object
+        """
+        try:
+            # Extract indicators from signal
+            indicators = signal.indicators if hasattr(signal, 'indicators') else {}
+            
+            # Build signal data for tracking
+            signal_data = {
+                'stock_symbol': signal.ticker,
+                'entry_price': indicators.get('close', 0),
+                'target_price': indicators.get('target_price', 0),
+                'sl_price': indicators.get('stop_loss', 0),
+                'confidence_score': 50,  # Default, will be enhanced with reasoning
+                'signal_type': 'TREND',
+                'reasoning': {
+                    'signal_indicators': indicators
+                }
+            }
+            
+            self._track_signal(signal_data, 'TREND')
+            
+        except Exception as e:
+            logger.error(f"Error tracking trend signal: {e}")
+    
+    def _track_verc_signal(self, signal):
+        """
+        Track a VERC signal in the learning system.
+        
+        Args:
+            signal: VERCSignal object
+        """
+        try:
+            # Build signal data for tracking
+            signal_data = {
+                'stock_symbol': signal.stock_symbol,
+                'entry_price': signal.entry_min,
+                'target_price': signal.target_1,
+                'sl_price': signal.stop_loss,
+                'confidence_score': signal.confidence_score,
+                'signal_type': 'VERC',
+                'reasoning': {
+                    'verc_score': signal.confidence_score,
+                    'volume_ratio': signal.volume_ratio
+                }
+            }
+            
+            self._track_signal(signal_data, 'VERC')
+            
+        except Exception as e:
+            logger.error(f"Error tracking VERC signal: {e}")
+    
+    def get_performance_stats(self) -> dict:
+        """
+        Get current performance statistics including SIQ.
+        
+        Returns:
+            Performance metrics dict
+        """
+        try:
+            return self.performance_tracker.generate_performance_report()
+        except Exception as e:
+            logger.error(f"Error getting performance stats: {e}")
+            return {}
+    
+    # ==================== END NEW ====================
+    
     def start(self):
         """Start the scanner with scheduled execution."""
         
@@ -445,7 +650,8 @@ class NSETrendScanner:
         ai_status = "✅" if self.ai_analyzer.is_available() else "❌"
         
         # Send startup notification
-        self.alert_service.send_system_status(
+        active_signals = self.history_manager.get_active_count()
+        startup_msg = (
             f"🚀 NSE Trend Scanner Agent Started\n"
             f"• Monitoring {len(self.stocks)} stocks\n"
             f"• Timeframe: 1D\n"
@@ -454,8 +660,15 @@ class NSETrendScanner:
             f"• Strategies: Trend + VERC\n"
             f"• Max Signals: 2 per strategy\n"
             f"• AI Analysis: {ai_status}\n"
-            f"• Telegram Bot: {'✅ Enabled' if self.telegram_bot else '❌ Disabled'}"
+            f"• Telegram Bot: {'✅ Enabled' if self.telegram_bot else '❌ Disabled'}\n"
+            f"──────────────────────\n"
+            f"🧠 REASONING + LEARNING:\n"
+            f"• Signal Tracking: ✅ Active\n"
+            f"• Active Signals: {active_signals}\n"
+            f"• SIQ Scoring: ✅ Enabled\n"
+            f"• Outcome Notifications: ✅ Enabled"
         )
+        self.alert_service.send_system_status(startup_msg)
         
         # Start Telegram bot handler for two-way communication
         if self.telegram_bot:
