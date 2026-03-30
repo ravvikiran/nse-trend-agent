@@ -20,14 +20,18 @@ class NotificationManager:
     Uses AlertService for Telegram messaging.
     """
     
-    def __init__(self, alert_service: AlertService = None):
+    def __init__(self, alert_service: AlertService = None, history_manager=None, performance_tracker=None):
         """
         Initialize notification manager.
         
         Args:
             alert_service: Alert service for Telegram
+            history_manager: History manager for data access
+            performance_tracker: Performance tracker for reports
         """
         self.alert_service = alert_service or AlertService()
+        self.history_manager = history_manager
+        self.performance_tracker = performance_tracker
         self.last_report_time = {}
         
         logger.info("NotificationManager initialized")
@@ -298,18 +302,16 @@ Threshold: {threshold:.2f}%
         if force or self._is_due_for_report('daily', hours=24):
             try:
                 # Get performance data
-                from .performance_tracker import create_performance_tracker
-                from .history_manager import create_history_manager
-                
-                history = create_history_manager()
-                tracker = create_performance_tracker(history)
-                perf_data = tracker.generate_performance_report()
-                
-                success = self.send_daily_report(perf_data)
-                results['daily'] = success
-                
-                if success:
-                    self.last_report_time['daily'] = now
+                if self.performance_tracker:
+                    perf_data = self.performance_tracker.generate_performance_report()
+                    success = self.send_daily_report(perf_data)
+                    results['daily'] = success
+                    
+                    if success:
+                        self.last_report_time['daily'] = now
+                else:
+                    logger.warning("No performance tracker available for daily report")
+                    results['daily'] = False
                     
             except Exception as e:
                 logger.error(f"Error sending daily report: {e}")
@@ -319,18 +321,16 @@ Threshold: {threshold:.2f}%
         if force or (now.weekday() == 6 and now.hour >= 10):
             if force or self._is_due_for_report('weekly', hours=168):  # 7 days
                 try:
-                    from .performance_tracker import create_performance_tracker
-                    from .history_manager import create_history_manager
-                    
-                    history = create_history_manager()
-                    tracker = create_performance_tracker(history)
-                    perf_data = tracker.generate_performance_report()
-                    
-                    success = self.send_weekly_report(perf_data)
-                    results['weekly'] = success
-                    
-                    if success:
-                        self.last_report_time['weekly'] = now
+                    if self.performance_tracker:
+                        perf_data = self.performance_tracker.generate_performance_report()
+                        success = self.send_weekly_report(perf_data)
+                        results['weekly'] = success
+                        
+                        if success:
+                            self.last_report_time['weekly'] = now
+                    else:
+                        logger.warning("No performance tracker available for weekly report")
+                        results['weekly'] = False
                         
                 except Exception as e:
                     logger.error(f"Error sending weekly report: {e}")
@@ -419,6 +419,6 @@ Threshold: {threshold:.2f}%
             return False
 
 
-def create_notification_manager(alert_service: AlertService = None) -> NotificationManager:
+def create_notification_manager(alert_service: AlertService = None, history_manager=None, performance_tracker=None) -> NotificationManager:
     """Factory function to create notification manager."""
-    return NotificationManager(alert_service)
+    return NotificationManager(alert_service, history_manager, performance_tracker)

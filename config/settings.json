@@ -8,6 +8,16 @@
         "scan_interval_minutes": 15,
         "max_signals_per_strategy": 2
     },
+    "scheduler": {
+        "timezone": "Asia/Kolkata",
+        "scan_time_hour": 15,
+        "scan_time_minute": 0,
+        "run_days": [1, 2, 3, 4, 5],
+        "market_open_hour": 9,
+        "market_open_minute": 15,
+        "market_close_hour": 15,
+        "market_close_minute": 30
+    },
     "stocks": {
         "config_file": "config/stocks.json"
     },

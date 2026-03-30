@@ -147,7 +147,7 @@ class SignalTracker:
                 # Try to get live data
                 stock_data = self.data_fetcher.fetch_stock_data(stock_symbol, interval='1d', days=2)
                 
-                if stock_data and len(stock_data) > 0:
+                if stock_data is not None and len(stock_data) > 0:
                     latest = stock_data.iloc[-1]
                     return float(latest.get('close', latest.get('Close', 0)))
                 

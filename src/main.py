@@ -7,9 +7,14 @@ import os
 import sys
 import argparse
 import logging
+import threading
+from pathlib import Path
 from datetime import datetime
 import pandas as pd
 import pytz
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -32,8 +37,9 @@ from notification_manager import create_notification_manager
 
 def setup_logging(log_level='INFO', log_file='logs/scanner.log'):
     """Setup logging configuration."""
-    # Create logs directory if it doesn't exist
-    os.makedirs(os.path.dirname(log_file), exist_ok=True)
+    # Create logs directory if it doesn't exist using Path
+    log_path = Path(log_file)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     
     # Configure root logger
     logging.basicConfig(
@@ -64,6 +70,7 @@ class NSETrendScanner:
         self.telegram_token = telegram_token
         self.telegram_chat_id = telegram_chat_id
         self._load_config()
+        self._load_settings()
         
         # Initialize components
         self.data_fetcher = DataFetcher()
@@ -109,10 +116,10 @@ class NSETrendScanner:
         self.reasoning_engine = create_reasoning_engine()
         
         # Notification Manager - handles outcome alerts and reports
-        self.notification_manager = create_notification_manager(self.alert_service)
+        self.notification_manager = create_notification_manager(self.alert_service, self.history_manager, self.performance_tracker)
         
         # Signal tracking interval (check every N scans)
-        self.signal_check_interval = 4  # Check every 4th scan (~1 hour)
+        self.signal_check_interval = self.settings.get('learning', {}).get('signal_tracking', {}).get('check_interval_scans', 4)
         self.scan_count = 0
         
         # Statistics
@@ -159,6 +166,26 @@ class NSETrendScanner:
         
         # Remove duplicates
         self.stocks = list(set(self.stocks))
+    
+    def _load_settings(self):
+        """Load settings from JSON file."""
+        import json
+        
+        settings_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            'config/settings.json'
+        )
+        
+        if os.path.exists(settings_path):
+            try:
+                with open(settings_path, 'r') as f:
+                    self.settings = json.load(f)
+                logger.info("Settings loaded from config/settings.json")
+            except Exception as e:
+                logger.error(f"Error loading settings: {e}")
+                self.settings = {}
+        else:
+            self.settings = {}
     
     def scan(self):
         """
@@ -208,8 +235,9 @@ class NSETrendScanner:
         if self.strategy in ['trend', 'all']:
             trend_signals = self._get_trend_signals(stocks_data)
             
-            # Limit to top 2 trend signals
-            trend_signals = trend_signals[:2] if trend_signals else []
+            # Limit to top N trend signals
+            max_signals = self.settings.get('scanner', {}).get('max_signals_per_strategy', 2)
+            trend_signals = trend_signals[:max_signals] if trend_signals else []
             
             for signal in trend_signals:
                 signal_key = f"TREND:{signal.ticker}"
@@ -230,8 +258,9 @@ class NSETrendScanner:
         if self.strategy in ['verc', 'all']:
             verc_signals = self._get_verc_signals(stocks_data)
             
-            # Limit to top 2 VERC signals
-            verc_signals = verc_signals[:2] if verc_signals else []
+            # Limit to top N VERC signals
+            max_signals = self.settings.get('scanner', {}).get('max_signals_per_strategy', 2)
+            verc_signals = verc_signals[:max_signals] if verc_signals else []
             
             for signal in verc_signals:
                 signal_key = f"VERC:{signal.stock_symbol}"
@@ -349,7 +378,7 @@ class NSETrendScanner:
         # Add tracking info
         alert_lines.extend([
             "",
-            f"📊 Signal ID: {signal.ticker}_{datetime.now().strftime('%Y%m%d%H%M%S')}",
+            f"📊 Signal ID: {signal.ticker}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
             "(This signal is now being tracked for outcome monitoring)"
         ])
         
@@ -415,7 +444,7 @@ class NSETrendScanner:
         # Add tracking info
         alert_lines.extend([
             "",
-            f"📊 Signal ID: {signal.stock_symbol}_{datetime.now().strftime('%Y%m%d%H%M%S')}",
+            f"📊 Signal ID: {signal.stock_symbol}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
             "(This signal is now being tracked for outcome monitoring)"
         ])
         
@@ -491,10 +520,13 @@ class NSETrendScanner:
     
     def _estimate_time_to_target(self, current_price, target_price, atr):
         """Estimate time to reach target based on ATR."""
-        if atr is None or atr == 0:
+        if atr is None or atr <= 0 or current_price <= 0:
             return "Unknown"
         
         price_diff = abs(target_price - current_price)
+        if price_diff == 0:
+            return "Already at target"
+        
         days_estimate = price_diff / atr
         
         if days_estimate <= 1:
@@ -710,7 +742,7 @@ class NSETrendScanner:
         """Run a single scan (for testing)."""
         # Check market hours
         if not self.data_fetcher.is_market_open():
-            return
+            logger.info("Market is currently closed. Scan will run but may not have live data.")
         
         self.scan()
         
@@ -721,6 +753,12 @@ class NSETrendScanner:
     
     def test_telegram(self) -> bool:
         """Test Telegram connection."""
+        if not self.telegram_token or not self.telegram_chat_id:
+            logger.warning("Telegram credentials not configured. Use --telegram-token and --telegram-chat-id or set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID environment variables.")
+            print("ERROR: Telegram credentials not configured!")
+            print("Please set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID environment variables")
+            print("Or pass them as command line arguments: --telegram-token TOKEN --telegram-chat-id ID")
+            return False
         return self.alert_service.test_connection()
 
 
@@ -792,7 +830,109 @@ def parse_arguments():
         help='Log file path'
     )
     
+    parser.add_argument(
+        '--schedule',
+        action='store_true',
+        help='Run with scheduler (daily at 3 PM Mon-Fri) + Telegram bot'
+    )
+    
     return parser.parse_args()
+
+
+def run_scheduled(config: dict, logger):
+    """
+    Run the scanner with scheduler and Telegram bot (both running together)
+    """
+    logger.info("Initializing scheduler and Telegram bot...")
+    
+    # Import here to avoid circular imports
+    from scheduler.scanner_scheduler import ScannerScheduler
+    
+    # Check if telegram_bot exists, otherwise use alert_service
+    try:
+        from notifications.telegram_bot import TelegramBot
+    except ImportError:
+        # Fall back to using the scanner's built-in telegram handler
+        TelegramBot = None
+    
+    # Create scanner
+    scanner = NSETrendScanner(
+        config_path='config/stocks.json',
+        telegram_token=config.get('telegram', {}).get('bot_token') or os.environ.get('TELEGRAM_BOT_TOKEN'),
+        telegram_chat_id=config.get('telegram', {}).get('chat_id') or os.environ.get('TELEGRAM_CHAT_ID'),
+        use_mock_alerts=False,
+        strategy='all',
+        enable_telegram_bot=False
+    )
+    
+    # Create scheduler
+    scheduler = ScannerScheduler(config)
+    
+    # Add the scan job
+    def scan_job():
+        scanner.scan()
+    
+    scheduler.add_job(scan_job)
+    
+    # Add signal monitoring job if enabled
+    signal_tracking = config.get('learning', {}).get('signal_tracking', {})
+    if signal_tracking.get('enabled', True):
+        def monitor_job():
+            scanner._check_active_signals()
+        
+        from apscheduler.triggers.interval import IntervalTrigger
+        check_interval = signal_tracking.get('check_interval_scans', 4)
+        # Convert scans to minutes (assuming one scan per 15 min)
+        monitor_minutes = max(15, check_interval * 15)
+        
+        from apscheduler.executors.pool import ThreadPoolExecutor
+        executors = {'default': ThreadPoolExecutor(max_workers=1)}
+        
+        # Add monitor job directly to scheduler
+        scheduler.scheduler.add_job(
+            monitor_job,
+            trigger=IntervalTrigger(minutes=monitor_minutes, timezone=config.get('scheduler', {}).get('timezone', 'Asia/Kolkata')),
+            id='monitor_job',
+            name='Signal Monitor',
+            replace_existing=True,
+            executor='default'
+        )
+        logger.info(f"Signal monitoring job scheduled: every {monitor_minutes} minutes")
+    
+    # Start scheduler
+    scheduler.start()
+    
+    logger.info(f"Scheduler running. Next scan: {scheduler.get_next_run()}")
+    
+    # Start Telegram bot in polling mode (in a separate thread)
+    bot = None
+    bot_thread = None
+    
+    if TelegramBot:
+        try:
+            bot = TelegramBot(config)
+            if bot.is_configured():
+                logger.info("Starting Telegram bot in polling mode...")
+                bot_thread = threading.Thread(target=bot.start_polling, daemon=True)
+                bot_thread.start()
+            else:
+                logger.warning("Telegram bot not configured - polling not started")
+        except Exception as e:
+            logger.warning(f"Could not start Telegram bot: {e}")
+    else:
+        logger.warning("TelegramBot not available - polling not started")
+    
+    logger.info("System running. Scanner at 3 PM Mon-Fri, bot responding to commands.")
+    logger.info("Press Ctrl+C to stop")
+    
+    try:
+        import time
+        while True:
+            time.sleep(60)
+            logger.debug(f"Next scan: {scheduler.get_next_run()}")
+    except KeyboardInterrupt:
+        logger.info("Shutting down...")
+        scheduler.stop()
 
 
 def main():
@@ -804,6 +944,21 @@ def main():
     logging.getLogger('yfinance').setLevel(logging.ERROR)
     logging.getLogger('pandas').setLevel(logging.ERROR)
     setup_logging(args.log_level, args.log_file)
+    
+    # Handle --schedule mode (new combined scheduler + bot mode)
+    if args.schedule:
+        # Load full config
+        import json
+        settings_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            'config/settings.json'
+        )
+        with open(settings_path, 'r') as f:
+            config = json.load(f)
+        
+        logger = logging.getLogger(__name__)
+        run_scheduled(config, logger)
+        return
     
     # Create scanner
     scanner = NSETrendScanner(

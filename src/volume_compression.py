@@ -103,6 +103,9 @@ def detect_range_compression(
     recent_df = df.tail(lookback)
     current_price = df['close'].iloc[-1]
     
+    if current_price <= 0:
+        return False, 0.0, 0.0
+    
     # Calculate highest high and lowest low for the lookback period
     range_high = recent_df['high'].max()
     range_low = recent_df['low'].min()

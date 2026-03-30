@@ -34,24 +34,30 @@ class DataFetcher:
         self.period = period
         self.interval = interval
     
-    def fetch_stock_data(self, ticker: str) -> Optional[pd.DataFrame]:
+    def fetch_stock_data(self, ticker: str, interval: Optional[str] = None, days: Optional[int] = None) -> Optional[pd.DataFrame]:
         """
         Fetch historical data for a single stock.
         
         Args:
             ticker: Stock ticker symbol (e.g., 'RELIANCE')
+            interval: Data interval (optional, uses default if not specified)
+            days: Number of days (optional, uses default if not specified)
             
         Returns:
             DataFrame with OHLCV data or None if fetch fails
         """
+        # Use instance defaults if not specified
+        actual_interval = interval if interval else self.interval
+        actual_days = days if days else self.period
+        
         # Add .NS suffix for NSE stocks
         nse_ticker = f"{ticker}.NS" if not ticker.endswith('.NS') else ticker
         
         try:
             stock = yf.Ticker(nse_ticker)
             df = stock.history(
-                period=f"{self.period}d",
-                interval=self.interval,
+                period=f"{actual_days}d",
+                interval=actual_interval,
                 auto_adjust=False
             )
             
