@@ -6,7 +6,8 @@
     "scanner": {
         "timeframe": "1D",
         "scan_interval_minutes": 15,
-        "max_signals_per_strategy": 2
+        "max_signals_per_strategy": 2,
+        "enable_mtf_strategy": true
     },
     "scheduler": {
         "timezone": "Asia/Kolkata",

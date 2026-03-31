@@ -34,6 +34,9 @@ from signal_tracker import create_signal_tracker
 from performance_tracker import create_performance_tracker
 from notification_manager import create_notification_manager
 
+# New MTF Strategy Module
+from mtf_strategy import MTFStrategyScanner, format_mtf_signal_alert, create_mtf_scanner
+
 
 def setup_logging(log_level='INFO', log_file='logs/scanner.log'):
     """Setup logging configuration."""
@@ -118,6 +121,11 @@ class NSETrendScanner:
         # Notification Manager - handles outcome alerts and reports
         self.notification_manager = create_notification_manager(self.alert_service, self.history_manager, self.performance_tracker)
         
+        # ==================== MTF Strategy Scanner ====================
+        # Multi-timeframe strategy (Trend + Pullback + Confirmation)
+        self.mtf_scanner = create_mtf_scanner()
+        self.mtf_scanner.set_data_fetcher(self.data_fetcher)
+        
         # Signal tracking interval (check every N scans)
         self.signal_check_interval = self.settings.get('learning', {}).get('signal_tracking', {}).get('check_interval_scans', 4)
         self.scan_count = 0
@@ -192,26 +200,30 @@ class NSETrendScanner:
         Main scan method that runs on schedule.
         
         Steps:
-        1. Fetch stock data
-        2. Run Trend Detection and VERC strategies with Reasoning Engine
-        3. Send unified alerts with entry/stop loss/targets
-        4. Track signals for learning
+        1. Fetch stock data (single and multi-timeframe)
+        2. Run Trend Detection and VERC strategies
+        3. Run MTF Strategy (NEW)
+        4. Send unified alerts with entry/stop loss/targets
+        5. Track signals for learning
         """
         self.total_scans += 1
         self.scan_count += 1
         scan_start = datetime.now()
         
         try:
-            # Step 1: Fetch data for all stocks
+            # Step 1a: Fetch data for all stocks (single timeframe for existing strategies)
             stocks_data = self.data_fetcher.fetch_multiple_stocks(self.stocks)
             
             if not stocks_data:
                 return
             
-            # Step 2: Run both strategies with Reasoning Engine
+            # Step 2: Run existing strategies with Reasoning Engine
             self._run_all_strategies(stocks_data)
             
-            # Step 3: Check active signals periodically
+            # Step 3: Run NEW MTF Strategy
+            self._run_mtf_strategy()
+            
+            # Step 4: Check active signals periodically
             if self.scan_count % self.signal_check_interval == 0:
                 self._check_active_signals()
             
@@ -222,6 +234,70 @@ class NSETrendScanner:
         except Exception as e:
             # Silently handle errors to keep scanner running
             pass
+    
+    def _run_mtf_strategy(self):
+        """
+        Run the Multi-Timeframe Strategy.
+        Fetches 1D, 1H, 15m data and validates all conditions.
+        """
+        try:
+            # Get strategy setting
+            use_mtf = self.settings.get('scanner', {}).get('enable_mtf_strategy', True)
+            if not use_mtf:
+                return
+            
+            logger.info("Running MTF Strategy scan...")
+            
+            # Fetch multi-timeframe data for all stocks
+            mtf_stocks_data = self.data_fetcher.fetch_multiple_stocks_multi_timeframe(
+                self.stocks,
+                max_workers=3
+            )
+            
+            if not mtf_stocks_data:
+                return
+            
+            # Calculate indicators for each timeframe
+            from indicator_engine import IndicatorEngine
+            engine = IndicatorEngine()
+            
+            all_indicators = {}
+            for ticker, mtf_data in mtf_stocks_data.items():
+                indicators = {}
+                for tf, df in mtf_data.items():
+                    if df is not None and not df.empty:
+                        df_with_ind = engine.calculate_indicators(df)
+                        if df_with_ind is not None and not df_with_ind.empty:
+                            indicators[tf] = engine.get_latest_indicators(df_with_ind)
+                if indicators:
+                    all_indicators[ticker] = indicators
+            
+            # Run MTF scanner
+            mtf_signals = self.mtf_scanner.scan_multiple_stocks(mtf_stocks_data, all_indicators)
+            
+            # Limit signals
+            max_signals = self.settings.get('scanner', {}).get('max_signals_per_strategy', 2)
+            mtf_signals = mtf_signals[:max_signals] if mtf_signals else []
+            
+            # Send alerts for valid MTF signals
+            current_signals = set()
+            for signal in mtf_signals:
+                signal_key = f"MTF:{signal.ticker}"
+                current_signals.add(signal_key)
+                
+                if signal_key not in self.previous_signals:
+                    try:
+                        alert = format_mtf_signal_alert(signal)
+                        self.alert_service.send_alert(alert)
+                        self.total_signals += 1
+                    except Exception as e:
+                        logger.error(f"Error sending MTF alert: {e}")
+            
+            # Update previous signals for MTF to prevent duplicate alerts
+            self.previous_signals = self.previous_signals.union(current_signals)
+            
+        except Exception as e:
+            logger.error(f"Error in MTF strategy: {e}")
     
     def _run_all_strategies(self, stocks_data):
         """

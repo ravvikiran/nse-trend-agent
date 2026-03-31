@@ -20,8 +20,11 @@ class DataFetcher:
     
     Attributes:
         period: Number of days of historical data to fetch
-        interval: Timeframe for the data (default: 15 minutes)
+        interval: Timeframe for the data (default: 1D)
     """
+    
+    # Supported timeframes
+    TIMEFRAMES = ['1D', '1H', '15m']
     
     def __init__(self, period: int = 16, interval: str = "1D"):
         """
@@ -29,10 +32,12 @@ class DataFetcher:
         
         Args:
             period: Number of days of historical data (default: 16 days for ~250 candles)
-            interval: Data interval (default: 15 minutes)
+            interval: Data interval (default: 1D for daily)
         """
         self.period = period
         self.interval = interval
+        # Cache for multi-timeframe data
+        self._mtf_cache = {}
     
     def fetch_stock_data(self, ticker: str, interval: Optional[str] = None, days: Optional[int] = None) -> Optional[pd.DataFrame]:
         """
@@ -64,8 +69,17 @@ class DataFetcher:
             if df.empty:
                 return None
             
-            # Ensure we have enough data points
-            if len(df) < 50:
+            # Minimum candles based on interval
+            # 1D: 20 candles (20 days)
+            # 1H: 50 candles 
+            # 15m: 50 candles
+            min_candles = {
+                '1D': 20, '1d': 20,
+                '1H': 30, '1h': 30,
+                '15m': 30, '15M': 30
+            }.get(actual_interval, 50)
+            
+            if len(df) < min_candles:
                 return None
             
             # Normalize column names to lowercase
@@ -74,7 +88,7 @@ class DataFetcher:
             # Add ticker column for reference
             df['ticker'] = ticker
             
-            logger.debug(f"Fetched {len(df)} candles for {nse_ticker}")
+            logger.debug(f"Fetched {len(df)} candles for {nse_ticker} ({actual_interval})")
             return df
             
         except Exception as e:
@@ -166,3 +180,72 @@ class DataFetcher:
         except Exception as e:
             logger.error(f"Error fetching live data for {ticker}: {str(e)}")
             return None
+    
+    def fetch_multi_timeframe(self, ticker: str, days: int = 30) -> Dict[str, pd.DataFrame]:
+        """
+        Fetch data from multiple timeframes for a single stock.
+        
+        Fetches: 1D (trend), 1H (structure), 15m (entry)
+        
+        Args:
+            ticker: Stock ticker symbol
+            days: Number of days of historical data
+            
+        Returns:
+            Dictionary mapping timeframe to DataFrame
+        """
+        results = {}
+        
+        # Timeframe configurations
+        timeframe_configs = {
+            '1D': {'interval': '1D', 'days': days},      # Trend identification
+            '1H': {'interval': '1h', 'days': days},      # Structure + Pullback
+            '15m': {'interval': '15m', 'days': 5}        # Entry trigger
+        }
+        
+        for tf_name, config in timeframe_configs.items():
+            df = self.fetch_stock_data(
+                ticker, 
+                interval=config['interval'],
+                days=config['days']
+            )
+            if df is not None and not df.empty:
+                results[tf_name] = df
+        
+        return results
+    
+    def fetch_multiple_stocks_multi_timeframe(
+        self, 
+        tickers: list, 
+        max_workers: int = 3
+    ) -> Dict[str, Dict[str, pd.DataFrame]]:
+        """
+        Fetch multi-timeframe data for multiple stocks.
+        
+        Args:
+            tickers: List of stock ticker symbols
+            max_workers: Maximum number of parallel downloads
+            
+        Returns:
+            Dictionary mapping ticker to its multi-timeframe data
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        results = {}
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_ticker = {
+                executor.submit(self.fetch_multi_timeframe, ticker): ticker
+                for ticker in tickers
+            }
+            
+            for future in as_completed(future_to_ticker):
+                ticker = future_to_ticker[future]
+                try:
+                    mtf_data = future.result()
+                    if mtf_data:
+                        results[ticker] = mtf_data
+                except Exception as e:
+                    logger.error(f"Error fetching MTF data for {ticker}: {str(e)}")
+        
+        return results
