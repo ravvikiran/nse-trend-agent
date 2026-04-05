@@ -335,7 +335,18 @@ class TelegramBotHandler:
             '/ai': self._cmd_ai_analysis,
             '/trend': self._cmd_trend,
             '/status': self._cmd_status,
+            '/signals': self._cmd_signals,
+            '/next': self._cmd_next,
+            '/prev': self._cmd_prev,
+            '/refresh': self._cmd_refresh,
+            '/stop': self._cmd_stop,
         }
+        
+        # Signals storage and pagination
+        self._signals_cache = []
+        self._current_page = 0
+        self._signals_per_page = 5
+        self._last_scan_time = None
     
     def _send_message(self, text: str, chat_id: str = None) -> bool:
         """Send a message to Telegram."""
@@ -360,13 +371,17 @@ class TelegramBotHandler:
 I scan NSE stocks for trend and VERC signals.
 
 *Available Commands:*
-• /analyze [STOCK] - Get AI-powered stock analysis
-• /trend [STOCK] - Get trend analysis
-• /status - Check scanner status
-• /help - Show this help message
+• `/analyze [STOCK]` - Get AI-powered stock analysis
+• `/trend [STOCK]` - Get trend analysis
+• `/signals` - View paginated signals list
+• `/next` / `/prev` - Navigate signals
+• `/status` - Check scanner status
+• `/refresh` - Run new scan instructions
+• `/stop` - Stop the bot
+• `/help` - Show help message
 
 *Quick Analysis:*
-Just send me a stock symbol (e.g., `RELIANCE` or `RELIANCE.NS`) and I'll analyze it!"""
+Just send me a stock symbol (e.g., `RELIANCE`) and I'll analyze it!"""
 
     def _cmd_help(self, chat_id: str) -> str:
         """Handle /help command."""
@@ -375,6 +390,11 @@ Just send me a stock symbol (e.g., `RELIANCE` or `RELIANCE.NS`) and I'll analyze
 *Commands:*
 • `/analyze RELIANCE` - AI analysis of a stock
 • `/trend HDFCBANK` - Technical trend analysis
+• `/signals` - View paginated signals (5 per page)
+• `/next` - Next page of signals
+• `/prev` - Previous page of signals
+• `/refresh` - Instructions to run new scan
+• `/stop` - Stop the bot
 • `/status` - Scanner status
 
 *Quick Usage:*
@@ -390,6 +410,86 @@ Just type a stock symbol to get instant analysis!"""
 AI Analysis: {ai_status}
 Data Feed: {data_status}
 Bot: Running"""
+
+    def _cmd_signals(self, args: str, chat_id: str) -> str:
+        """Handle /signals command - Show paginated signals list."""
+        if not self._signals_cache:
+            return "📊 *No Signals*\n\nNo signals available. Run a scan to generate signals.\n\nUse /refresh to run a new scan."
+        
+        total_pages = (len(self._signals_cache) + self._signals_per_page - 1) // self._signals_per_page
+        self._current_page = 0
+        
+        return self._format_signals_page()
+    
+    def _cmd_next(self, args: str, chat_id: str) -> str:
+        """Handle /next command - Navigate to next page of signals."""
+        if not self._signals_cache:
+            return "📊 *No Signals*\n\nNo signals available. Use /signals to view available signals."
+        
+        total_pages = (len(self._signals_cache) + self._signals_per_page - 1) // self._signals_per_page
+        self._current_page = (self._current_page + 1) % total_pages
+        
+        return self._format_signals_page()
+    
+    def _cmd_prev(self, args: str, chat_id: str) -> str:
+        """Handle /prev command - Navigate to previous page of signals."""
+        if not self._signals_cache:
+            return "📊 *No Signals*\n\nNo signals available. Use /signals to view available signals."
+        
+        total_pages = (len(self._signals_cache) + self._signals_per_page - 1) // self._signals_per_page
+        self._current_page = (self._current_page - 1) % total_pages
+        
+        return self._format_signals_page()
+    
+    def _cmd_refresh(self, args: str, chat_id: str) -> str:
+        """Handle /refresh command - Instructions to run new scan."""
+        return """🔄 *Refresh Scanner*
+
+To run a new scan, restart the scanner:
+```bash
+python -m src.main
+```
+
+The scanner runs every 15 minutes during market hours (9:15 AM - 3:30 PM IST)."""
+    
+    def _cmd_stop(self, args: str, chat_id: str) -> str:
+        """Handle /stop command - Stop the bot."""
+        self.running = False
+        return "🛑 *Bot Stopped*\n\nThe scanner continues running in the background. Restart the bot to enable interactive commands again."
+    
+    def _format_signals_page(self) -> str:
+        """Format the current page of signals."""
+        start_idx = self._current_page * self._signals_per_page
+        end_idx = min(start_idx + self._signals_per_page, len(self._signals_cache))
+        page_signals = self._signals_cache[start_idx:end_idx]
+        
+        total_pages = (len(self._signals_cache) + self._signals_per_page - 1) // self._signals_per_page
+        
+        message = f"📊 *Signals List* (Page {self._current_page + 1}/{total_pages})\n\n"
+        
+        for i, signal in enumerate(page_signals, start=start_idx + 1):
+            stock = signal.get('stock_symbol', signal.get('ticker', 'N/A'))
+            signal_type = signal.get('signal_type', signal.get('type', 'N/A'))
+            confidence = signal.get('confidence', signal.get('score', 'N/A'))
+            price = signal.get('current_price', signal.get('price', 0))
+            
+            message += f"{i}. *{stock}*\n"
+            message += f"   Type: {signal_type} | Conf: {confidence}/10\n"
+            message += f"   Price: ₹{price:.2f}\n\n"
+        
+        message += "_Use /next or /prev to navigate_"
+        
+        return message
+    
+    def update_signals_cache(self, signals: List[Dict]):
+        """Update the signals cache with new scan results."""
+        self._signals_cache = signals
+        self._current_page = 0
+        self._last_scan_time = datetime.now()
+    
+    def add_signal(self, signal: Dict):
+        """Add a single signal to the cache."""
+        self._signals_cache.append(signal)
 
     async def _cmd_analyze(self, args: str, chat_id: str) -> str:
         """Handle /analyze command - AI-powered stock analysis."""
