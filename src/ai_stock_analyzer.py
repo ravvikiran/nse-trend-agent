@@ -217,11 +217,10 @@ class GoogleGeminiProvider(BaseLLMProvider):
     def _init_client(self):
         if self.api_key:
             try:
-                import google.generativeai as genai
-                genai.configure(api_key=self.api_key)
-                self.client = genai
+                from google.genai import Client
+                self.client = Client(api_key=self.api_key)
             except ImportError:
-                logger.warning("Google GenerativeAI package not installed")
+                logger.warning("Google GenAI package not installed")
     
     def is_available(self) -> bool:
         return self.client is not None and bool(self.api_key)
@@ -238,8 +237,14 @@ class GoogleGeminiProvider(BaseLLMProvider):
             else:
                 prompt += msg["content"]
         
-        model = self.client.GenerativeModel(self.model)
-        response = model.generate_content(prompt)
+        response = self.client.models.generate(
+            model=self.model,
+            contents=prompt,
+            config={
+                'temperature': kwargs.get("temperature", 0.7),
+                'max_output_tokens': kwargs.get("max_tokens", 1000)
+            }
+        )
         return response.text
 
 
