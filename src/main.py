@@ -925,11 +925,11 @@ def run_scheduled(config: dict, logger):
     from scheduler.scanner_scheduler import ScannerScheduler
     
     # Check if telegram_bot exists, otherwise use alert_service
+    TelegramBot = None
     try:
         from notifications.telegram_bot import TelegramBot
-    except ImportError:
-        # Fall back to using the scanner's built-in telegram handler
-        TelegramBot = None
+    except (ImportError, ModuleNotFoundError):
+        pass
     
     # Create scanner
     scanner = NSETrendScanner(

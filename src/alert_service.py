@@ -587,7 +587,7 @@ The scanner runs every 15 minutes during market hours (9:15 AM - 3:30 PM IST).""
         
         # Volume analysis
         volume_ma30 = df['volume'].rolling(30).mean().iloc[-1]
-        volume_ratio = latest['volume'] / volume_30 if volume_30 > 0 else 0
+        volume_ratio = latest['volume'] / volume_ma30 if volume_ma30 > 0 else 0
         
         # EMA alignment score
         ema_alignment_score = 0
