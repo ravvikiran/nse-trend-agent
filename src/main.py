@@ -10,6 +10,7 @@ import logging
 import threading
 from pathlib import Path
 from datetime import datetime
+from typing import Dict, Any, List
 import pandas as pd
 import pytz
 
@@ -523,20 +524,6 @@ class NSETrendScanner:
             ""
         ])
         
-        if score_breakdown:
-            alert_lines.extend([
-                "📈 Score Breakdown:",
-            ])
-            for factor, score in score_breakdown.items():
-                if score != 0:
-                    alert_lines.append(f"  {factor}: {'+' if score > 0 else ''}{score}")
-            alert_lines.append("")
-        
-        alert_lines.extend([
-            f"📊 Signal ID: {signal.ticker}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
-            "(This signal is now being tracked for outcome monitoring)"
-        ])
-        
         return "\n".join(alert_lines)
     
     def _format_verc_alert(self, signal, df=None):
@@ -589,35 +576,16 @@ class NSETrendScanner:
         
         alert_lines.append(f"Confidence: {signal.confidence_score}/10")
         
-        # Add VERC-specific scoring
-        if hasattr(signal, 'verc_score'):
-            alert_lines.extend([
-                "",
-                f"📈 VERC Score: {signal.verc_score}/100"
-            ])
-        
-        # Add tracking info
-        alert_lines.extend([
-            "",
-            f"📊 Signal ID: {signal.stock_symbol}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
-            "(This signal is now being tracked for outcome monitoring)"
-        ])
-        
         return "\n".join(alert_lines)
     
     def _send_unified_alerts(self, alerts):
         """Send all alerts as a single unified message."""
-        # Check if LLM/AI is enabled and available
-        llm_enabled = self.settings.get('llm', {}).get('enabled', False)
-        ai_available = self.ai_analyzer.is_available() if hasattr(self, 'ai_analyzer') else False
+        # Telegram should ONLY receive trading signals (max 5 per scan)
+        # DO NOT send "no signals" messages to Telegram - only log locally
         
-        # If no signals and LLM is enabled and available, send "No Stocks met confidence threshold"
         if not alerts:
-            if llm_enabled and ai_available:
-                message = "📊 No Stocks met confidence threshold\n\nAI scanning found no stocks with sufficient confidence (≥60) to send as signals."
-                target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
-                target_method(message)
-                self.total_signals += 1
+            # Log locally only - DO NOT send to Telegram
+            logger.info("No signals found in this scan")
             return
         
         # Send each alert separately for clarity
@@ -644,6 +612,219 @@ class NSETrendScanner:
             "Markets may be consolidating."
         )
         self.alert_service.send_alert(message)
+    
+    def _calculate_trade_status(self, trade: Dict, current_price: float) -> str:
+        """Calculate trade status based on current price."""
+        targets = trade.get('targets', [])
+        entry = trade.get('entry', 0)
+        stop_loss = trade.get('stop_loss', 0)
+        
+        if not targets or entry == 0:
+            return 'OPEN'
+        
+        t1 = targets[0] if len(targets) > 0 else 0
+        t2 = targets[1] if len(targets) > 1 else 0
+        t3 = targets[2] if len(targets) > 2 else 0
+        
+        if current_price >= t3 and t3 > 0:
+            return 'TARGET3_HIT'
+        elif current_price >= t2 and t2 > 0:
+            return 'TARGET2_HIT'
+        elif current_price >= t1 and t1 > 0:
+            return 'TARGET1_HIT'
+        elif current_price <= stop_loss:
+            return 'STOP_LOSS_HIT'
+        elif stop_loss > 0 and current_price <= stop_loss * 1.01:
+            return 'NEAR_SL'
+        else:
+            return 'OPEN'
+    
+    def _format_signal_for_telegram(self, signal, strategy_type: str, current_price: float = 0) -> str:
+        """Format a new signal for Telegram - clean format."""
+        if strategy_type == 'TREND':
+            indicators = signal.indicators
+            ticker = signal.ticker
+            entry = indicators.get('close', 0)
+            ema50 = indicators.get('ema50', 0)
+            atr = indicators.get('atr', 0)
+            
+            stop_loss = min(ema50, entry * 0.98) if ema50 > 0 else entry * 0.98
+            if atr > 0:
+                stop_loss = min(stop_loss, entry - (2 * atr))
+            
+            risk = entry - stop_loss
+            target_1 = entry + (risk * 2) if risk > 0 else entry * 1.1
+            target_2 = entry + (risk * 3) if risk > 0 else entry * 1.15
+            target_3 = entry + (risk * 4) if risk > 0 else entry * 1.2
+            
+            rsi = indicators.get('rsi_value', 0) or indicators.get('rsi', 0)
+            volume_ratio = signal.volume_ratio if hasattr(signal, 'volume_ratio') else indicators.get('volume_ratio', 0)
+            score = signal.rank_score if hasattr(signal, 'rank_score') else signal.trend_score if hasattr(signal, 'trend_score') else 0
+            current_price = entry
+            
+            return (
+                f"SYMBOL: {ticker}\n"
+                f"STRATEGY: {strategy_type}\n"
+                f"ENTRY: {entry:.0f}\n"
+                f"STOP: {stop_loss:.0f}\n"
+                f"TARGETS: {target_1:.0f} / {target_2:.0f} / {target_3:.0f}\n"
+                f"RSI: {rsi:.1f}\n"
+                f"VOLUME: {volume_ratio:.2f}x\n"
+                f"SCORE: {score:.1f}"
+            )
+        else:
+            ticker = signal.stock_symbol
+            entry = signal.entry_min if hasattr(signal, 'entry_min') else signal.current_price
+            stop_loss = signal.stop_loss
+            t1 = signal.target_1 if hasattr(signal, 'target_1') else 0
+            t2 = signal.target_2 if hasattr(signal, 'target_2') else 0
+            t3 = signal.target_3 if hasattr(signal, 'target_3') else 0
+            rsi = signal.rsi if hasattr(signal, 'rsi') else 0
+            volume_ratio = signal.relative_volume if hasattr(signal, 'relative_volume') else 0
+            score = signal.rank_score if hasattr(signal, 'rank_score') else signal.confidence_score if hasattr(signal, 'confidence_score') else 0
+            
+            return (
+                f"SYMBOL: {ticker}\n"
+                f"STRATEGY: {strategy_type}\n"
+                f"ENTRY: {entry:.0f}\n"
+                f"STOP: {stop_loss:.0f}\n"
+                f"TARGETS: {t1:.0f} / {t2:.0f} / {t3:.0f}\n"
+                f"RSI: {rsi:.1f}\n"
+                f"VOLUME: {volume_ratio:.2f}x\n"
+                f"SCORE: {score:.1f}"
+            )
+    
+    def _format_update_for_telegram(self, trade: Dict, current_price: float, status: str) -> str:
+        """Format an update message for existing signal."""
+        symbol = trade.get('symbol', '')
+        strategy = trade.get('strategy', '')
+        entry = trade.get('entry', 0)
+        
+        return (
+            f"UPDATE: {symbol} ({strategy})\n"
+            f"Status: {status}\n"
+            f"Entry: {entry:.0f}\n"
+            f"Current Price: {current_price:.0f}\n"
+            f"Note: Already shared earlier"
+        )
+    
+    def _process_signal(self, signal, strategy_type: str, is_startup: bool = False) -> bool:
+        """Process a signal: check if exists in journal or send as new."""
+        from datetime import datetime
+        
+        ticker = signal.ticker if strategy_type == 'TREND' else signal.stock_symbol
+        
+        existing_trade = self.trade_journal.check_signal_exists(ticker, strategy_type)
+        
+        if existing_trade:
+            try:
+                current_price = 0
+                if strategy_type == 'TREND':
+                    current_price = signal.indicators.get('close', 0)
+                else:
+                    current_price = signal.current_price if hasattr(signal, 'current_price') else 0
+                
+                if current_price > 0:
+                    status = self._calculate_trade_status(existing_trade, current_price)
+                    
+                    note = "Rechecked at startup" if is_startup else "3PM review update"
+                    self.trade_journal.update_trade_note(existing_trade.get('trade_id', ''), note)
+                    
+                    update_msg = self._format_update_for_telegram(existing_trade, current_price, status)
+                    self.alert_service.send_alert(update_msg)
+                    logger.info(f"Trade update sent for {ticker}: {status}")
+                    return True
+            except Exception as e:
+                logger.error(f"Error processing existing trade: {e}")
+                return False
+        else:
+            try:
+                current_price = 0
+                entry = 0
+                stop_loss = 0
+                targets = []
+                rsi = 0
+                volume_ratio = 0
+                
+                if strategy_type == 'TREND':
+                    indicators = signal.indicators
+                    current_price = indicators.get('close', 0)
+                    entry = current_price
+                    ema50 = indicators.get('ema50', 0)
+                    atr = indicators.get('atr', 0)
+                    
+                    stop_loss = min(ema50, entry * 0.98) if ema50 > 0 else entry * 0.98
+                    if atr > 0:
+                        stop_loss = min(stop_loss, entry - (2 * atr))
+                    
+                    risk = entry - stop_loss
+                    target_1 = entry + (risk * 2)
+                    target_2 = entry + (risk * 3)
+                    target_3 = entry + (risk * 4)
+                    targets = [target_1, target_2, target_3]
+                    
+                    rsi = indicators.get('rsi_value', 0) or indicators.get('rsi', 0)
+                    volume_ratio = signal.volume_ratio if hasattr(signal, 'volume_ratio') else indicators.get('volume_ratio', 0)
+                else:
+                    entry = signal.entry_min if hasattr(signal, 'entry_min') else signal.current_price
+                    stop_loss = signal.stop_loss
+                    targets = [signal.target_1, signal.target_2, signal.target_3] if hasattr(signal, 'target_1') else []
+                    rsi = signal.rsi if hasattr(signal, 'rsi') else 0
+                    volume_ratio = signal.relative_volume if hasattr(signal, 'relative_volume') else 0
+                    current_price = signal.current_price if hasattr(signal, 'current_price') else entry
+                
+                trade_id = self.trade_journal.log_signal(
+                    ticker,
+                    strategy_type,
+                    entry,
+                    stop_loss,
+                    targets,
+                    {'volume_ratio': volume_ratio, 'rsi': rsi}
+                )
+                
+                signal_msg = self._format_signal_for_telegram(signal, strategy_type, current_price)
+                self.alert_service.send_alert(signal_msg)
+                self.total_signals += 1
+                logger.info(f"New signal sent for {ticker}: {trade_id}")
+                return True
+            except Exception as e:
+                logger.error(f"Error sending new signal: {e}")
+                return False
+        
+        return False
+    
+    def _run_startup_scan(self):
+        """Run startup scan - process signals with journal check."""
+        logger.info("Running startup scan...")
+        
+        stocks_data = self.data_fetcher.fetch_multiple_stocks(self.stocks)
+        if not stocks_data:
+            logger.warning("No stock data fetched")
+            return
+        
+        all_signals = []
+        
+        if self.strategy in ['trend', 'all']:
+            trend_signals = self._get_trend_signals(stocks_data)
+            for signal in trend_signals:
+                signal.strategy_type = 'TREND'
+                all_signals.append(signal)
+        
+        if self.strategy in ['verc', 'all']:
+            verc_signals = self._get_verc_signals(stocks_data)
+            for signal in verc_signals:
+                signal.strategy_type = 'VERC'
+                all_signals.append(signal)
+        
+        all_signals.sort(key=lambda x: getattr(x, 'rank_score', 0), reverse=True)
+        
+        final_signals = all_signals[:5]
+        
+        for signal in final_signals:
+            strategy_type = signal.strategy_type if hasattr(signal, 'strategy_type') and signal.strategy_type else 'TREND'
+            self._process_signal(signal, strategy_type, is_startup=True)
+        
+        logger.info(f"Startup scan complete - processed {len(final_signals)} signals")
     
     def _calculate_atr(self, df, period=14):
         """Calculate ATR for time estimation."""
@@ -944,36 +1125,15 @@ class NSETrendScanner:
         
         # Send startup notification
         active_signals = self.history_manager.get_active_count()
-        startup_msg = (
-            f"🚀 NSE Trend Scanner Agent Started\n"
-            f"• Monitoring {len(self.stocks)} stocks\n"
-            f"• Timeframe: 1D\n"
-            f"• Scan Interval: Every 15 min\n"
-            f"• Market Hours: 09:15 - 15:30 IST\n"
-            f"• Strategies: Trend + VERC\n"
-            f"• Max Signals: 2 per strategy\n"
-            f"• AI Analysis: {ai_status}\n"
-            f"• Telegram Bot: {'✅ Enabled' if self.telegram_bot else '❌ Disabled'}\n"
-            f"──────────────────────\n"
-            f"🧠 REASONING + LEARNING:\n"
-            f"• Signal Tracking: ✅ Active\n"
-            f"• Active Signals: {active_signals}\n"
-            f"• SIQ Scoring: ✅ Enabled\n"
-            f"• Outcome Notifications: ✅ Enabled"
-        )
-        self.alert_service.send_system_status(startup_msg)
+        # Only log startup info locally - DO NOT send to Telegram
+        # Telegram should ONLY receive trading signals
+        max_signals = self.settings.get('scanner', {}).get('max_signals_per_strategy', 2) * 2
+        logger.info(f"NSE Trend Scanner started - Strategy: {self.strategy}, Stocks: {len(self.stocks)}, Max Signals: {max_signals}, Active Signals: {active_signals}")
         
-        # Start Telegram bot handler for two-way communication
+        # Start Telegram bot handler for two-way communication (bot handles its own messages)
         if self.telegram_bot:
             self.telegram_bot.start_background()
-            self.alert_service.send_message(
-                "✅ *Telegram Bot Active!*\n\n"
-                "You can now:\n"
-                "• Send me a stock symbol (e.g., `RELIANCE`)\n"
-                "• Use /analyze RELIANCE for AI analysis\n"
-                "• Use /trend HDFCBANK for trend analysis\n"
-                "• Use /status to check scanner status"
-            )
+            logger.info("Telegram bot handler started")
         
         # Start scheduler
         self.scheduler.start()
@@ -991,13 +1151,9 @@ class NSETrendScanner:
         """Stop the scanner."""
         self.scheduler.stop()
         
-        # Send shutdown notification
-        self.alert_service.send_system_status(
-            f"🛑 NSE Trend Scanner Agent Stopped\n"
-            f"• Total scans: {self.total_scans}\n"
-            f"• Total signals: {self.total_signals}\n"
-            f"• Alerted stocks: {self.trend_detector.get_alert_count()}"
-        )
+        # Only log shutdown info locally - DO NOT send to Telegram
+        # Telegram should ONLY receive trading signals
+        logger.info(f"NSE Trend Scanner stopped - Total scans: {self.total_scans}, Total signals: {self.total_signals}")
     
     def run_once(self):
         """Run a single scan (for testing)."""

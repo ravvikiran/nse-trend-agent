@@ -187,6 +187,26 @@ class TradeJournal:
                 return trade
         return None
     
+    def check_signal_exists(self, symbol: str, strategy: str) -> Optional[Dict[str, Any]]:
+        """Check if a signal already exists in the journal."""
+        for trade in self.trades:
+            if trade.get('symbol', '').upper() == symbol.upper() and trade.get('strategy', '') == strategy:
+                if trade.get('outcome') == self.OUTCOME_OPEN:
+                    return trade
+        return None
+    
+    def update_trade_note(self, trade_id: str, note: str) -> bool:
+        """Update trade notes."""
+        for trade in self.trades:
+            if trade.get('trade_id') == trade_id:
+                existing_notes = trade.get('notes', '')
+                new_notes = f"{existing_notes}\n{note}" if existing_notes else note
+                trade['notes'] = new_notes
+                trade['updated_at'] = datetime.now().isoformat()
+                self._save_trades()
+                return True
+        return False
+    
     def get_open_trades(self) -> List[Dict[str, Any]]:
         return [t for t in self.trades if t.get('outcome') == self.OUTCOME_OPEN]
     

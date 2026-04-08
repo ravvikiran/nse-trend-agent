@@ -7,7 +7,7 @@ import os
 import json
 import logging
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from collections import defaultdict
 import math
 
@@ -18,8 +18,13 @@ DATA_DIR = 'data'
 
 class StrategyPerformanceTracker:
     """
-    Track performance for each strategy (last 50 trades).
+    Track performance for each strategy with context-aware learning.
     Metrics: Win rate, Avg RR, Drawdown, Holding time.
+    Features:
+    - Proportional weight adjustment (win_rate - 50) / 100
+    - Recency bias (recent trades matter more)
+    - Market condition awareness (TRENDING vs SIDEWAYS)
+    - Capped adaptive filters
     """
     
     PERFORMANCE_FILE = 'strategy_performance.json'
@@ -29,6 +34,15 @@ class StrategyPerformanceTracker:
     MIN_TRADES_THRESHOLD = 10
     SCORE_THRESHOLD = 40.0
     
+    RECENT_WEIGHT = 0.7
+    OLD_WEIGHT = 0.3
+    
+    FILTER_CAPS = {
+        'volume_ratio_min': 2.5,
+        'rsi_max': 70,
+        'atr_min': 0.1
+    }
+    
     def __init__(self, trade_journal, data_dir: str = DATA_DIR):
         self.trade_journal = trade_journal
         self.data_dir = data_dir
@@ -37,6 +51,15 @@ class StrategyPerformanceTracker:
             'TREND': 0.5,
             'VERC': 0.5,
             'MTF': 0.5
+        }
+        
+        self.context_weights = {
+            ('TREND', 'TRENDING'): 1.2,
+            ('TREND', 'SIDEWAYS'): 0.6,
+            ('VERC', 'TRENDING'): 1.0,
+            ('VERC', 'SIDEWAYS'): 1.0,
+            ('MTF', 'TRENDING'): 1.1,
+            ('MTF', 'SIDEWAYS'): 0.7
         }
         
         self.weight_history = {
@@ -55,18 +78,30 @@ class StrategyPerformanceTracker:
             'atr_min': 0.5
         }
         
+        self._current_market_condition = 'TRENDING'
+        
         logger.info("StrategyPerformanceTracker initialized")
+    
+    def set_market_condition(self, condition: str) -> None:
+        """Set current market condition (TRENDING or SIDEWAYS)."""
+        if condition in ['TRENDING', 'SIDEWAYS']:
+            self._current_market_condition = condition
+            logger.info(f"Market condition set to: {condition}")
+    
+    def get_market_condition(self) -> str:
+        """Get current market condition."""
+        return self._current_market_condition
     
     def get_strategy_stats(self, strategy: str, limit: int = 50) -> Dict[str, Any]:
         """
-        Get performance stats for a strategy (last N trades).
+        Get performance stats for a strategy with recency weighting.
         
         Args:
             strategy: TREND, VERC, or MTF
             limit: Number of recent trades to analyze
             
         Returns:
-            Dict with win_rate, avg_rr, drawdown, holding_time
+            Dict with win_rate, avg_rr, drawdown, holding_time, weighted_score
         """
         trades = self.trade_journal.get_trades_by_strategy(strategy, limit)
         closed = [t for t in trades if t.get('outcome') not in ['OPEN']]
@@ -78,7 +113,8 @@ class StrategyPerformanceTracker:
                 'win_rate': 0,
                 'avg_rr': 0,
                 'max_drawdown': 0,
-                'avg_holding_days': 0
+                'avg_holding_days': 0,
+                'weighted_score': 0
             }
         
         wins = [t for t in closed if t.get('outcome') == 'WIN']
@@ -106,6 +142,24 @@ class StrategyPerformanceTracker:
         
         avg_holding = sum(holding_times) / len(holding_times) if holding_times else 0
         
+        recent_trades = closed[-20:] if len(closed) > 20 else closed
+        old_trades = closed[:-20] if len(closed) > 20 else []
+        
+        recent_wr = self._calculate_win_rate(recent_trades)
+        old_wr = self._calculate_win_rate(old_trades) if old_trades else recent_wr
+        
+        weighted_win_rate = (recent_wr * self.RECENT_WEIGHT) + (old_wr * self.OLD_WEIGHT)
+        
+        recent_rr = self._calculate_avg_rr(recent_trades)
+        old_rr = self._calculate_avg_rr(old_trades) if old_trades else recent_rr
+        weighted_avg_rr = (recent_rr * self.RECENT_WEIGHT) + (old_rr * self.OLD_WEIGHT)
+        
+        weighted_score = self._calculate_performance_score({
+            'win_rate': weighted_win_rate,
+            'avg_rr': weighted_avg_rr,
+            'max_drawdown': max_drawdown
+        })
+        
         return {
             'strategy': strategy,
             'trades': total,
@@ -114,8 +168,28 @@ class StrategyPerformanceTracker:
             'win_rate': round(win_rate, 2),
             'avg_rr': round(avg_rr, 2),
             'max_drawdown': round(max_drawdown, 2),
-            'avg_holding_days': round(avg_holding, 1)
+            'avg_holding_days': round(avg_holding, 1),
+            'weighted_win_rate': round(weighted_win_rate, 2),
+            'weighted_avg_rr': round(weighted_avg_rr, 2),
+            'weighted_score': round(weighted_score, 2)
         }
+    
+    def _calculate_win_rate(self, trades: List[Dict]) -> float:
+        """Calculate win rate from trades."""
+        if not trades:
+            return 0
+        closed = [t for t in trades if t.get('outcome') not in ['OPEN']]
+        if not closed:
+            return 0
+        wins = len([t for t in closed if t.get('outcome') == 'WIN'])
+        return (wins / len(closed)) * 100
+    
+    def _calculate_avg_rr(self, trades: List[Dict]) -> float:
+        """Calculate average RR from trades."""
+        if not trades:
+            return 0
+        rr_values = [t.get('rr_achieved', 0) for t in trades if t.get('rr_achieved', 0) != 0]
+        return sum(rr_values) / len(rr_values) if rr_values else 0
     
     def get_all_strategy_stats(self) -> Dict[str, Dict[str, Any]]:
         """Get stats for all strategies."""
@@ -153,16 +227,49 @@ class StrategyPerformanceTracker:
         
         return round(score, 2)
     
+    def _calculate_proportional_adjustment(self, stats: Dict[str, Any], context_key: tuple) -> float:
+        """
+        Calculate weight adjustment based on performance.
+        
+        adjustment = (weighted_win_rate - 50) / 100
+        Range: -0.5 to +0.5
+        
+        Args:
+            stats: Strategy stats dict
+            context_key: (strategy, market_condition) tuple
+            
+        Returns:
+            Adjustment value
+        """
+        win_rate = stats.get('weighted_win_rate', stats.get('win_rate', 0))
+        avg_rr = stats.get('weighted_avg_rr', stats.get('avg_rr', 0))
+        
+        win_rate_adjustment = (win_rate - 50) / 100
+        
+        rr_bonus = 0
+        if avg_rr >= 2.0:
+            rr_bonus = 0.1
+        elif avg_rr >= 1.5:
+            rr_bonus = 0.05
+        elif avg_rr < 1.0:
+            rr_bonus = -0.05
+        
+        base_adjustment = win_rate_adjustment + rr_bonus
+        
+        context_multiplier = self.context_weights.get(context_key, 1.0)
+        adjusted = base_adjustment * context_multiplier
+        
+        return round(adjusted, 3)
+    
     def auto_optimize(self) -> Dict[str, Any]:
         """
-        Auto-Optimization Engine.
-        Adjust strategy weights based on composite performance score:
+        Auto-Optimization Engine with proportional adjustments.
+        
+        - Proportional weight adjustment based on win_rate
+        - Recency bias (recent trades matter more)
+        - Context-aware (strategy + market condition)
         - Smoothing: gradual weight changes using EMA
         - Min trade threshold: require minimum trades before optimizing
-        - Bounded weights: keep weights within defined range
-        
-        Score formula:
-            score = (win_rate * 0.5) + (avg_rr * 20 * 0.3) - (max_drawdown * 0.2)
         
         Returns:
             Dict with changes made
@@ -177,28 +284,26 @@ class StrategyPerformanceTracker:
                 continue
             
             current_weight = self.strategy_weights.get(strategy, 0.5)
-            score = self._calculate_performance_score(stats)
+            score = stats.get('weighted_score', self._calculate_performance_score(stats))
             
-            raw_weight = current_weight
+            context_key = (strategy, self._current_market_condition)
+            adjustment = self._calculate_proportional_adjustment(stats, context_key)
             
-            if score < self.score_threshold - 10:
-                raw_weight = max(self.WEIGHT_BOUNDS[0], current_weight - 0.1)
-            elif score > self.score_threshold + 10:
-                raw_weight = min(self.WEIGHT_BOUNDS[1], current_weight + 0.1)
+            raw_weight = current_weight + adjustment
             
             new_weight = self._bound_weight(self._smooth_weight(current_weight, raw_weight))
             new_weight = round(new_weight, 3)
             
             if abs(new_weight - current_weight) > 0.01:
-                if score < self.score_threshold - 10:
+                if new_weight < current_weight:
                     action = 'reduced'
-                    reason = f'score ({score}) < {self.score_threshold - 10}'
-                elif score > self.score_threshold + 10:
+                    reason = f'win_rate {stats.get("weighted_win_rate", 0):.1f}%'
+                elif new_weight > current_weight:
                     action = 'increased'
-                    reason = f'score ({score}) > {self.score_threshold + 10}'
+                    reason = f'win_rate {stats.get("weighted_win_rate", 0):.1f}%'
                 else:
                     action = 'stable'
-                    reason = f'score ({score}) in range'
+                    reason = f'score {score:.1f}'
                 
                 changes[strategy] = {
                     'action': action,
@@ -206,7 +311,9 @@ class StrategyPerformanceTracker:
                     'to': new_weight,
                     'trades': trade_count,
                     'score': score,
-                    'reason': reason
+                    'adjustment': adjustment,
+                    'reason': reason,
+                    'market_condition': self._current_market_condition
                 }
                 
                 self.weight_history[strategy].append(new_weight)
@@ -252,10 +359,10 @@ class StrategyPerformanceTracker:
     
     def adapt_filters(self, analysis: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Adaptive Filters - adjust strictness dynamically.
+        Adaptive Filters - adjust strictness dynamically with caps and smoothing.
         
         Examples:
-        - Too many false breakouts → increase volume_ratio from 1.5 → 1.8
+        - Too many false breakouts → increase volume_ratio from 1.5 → 1.8 (capped at 2.5)
         - Late entries → tighten RSI (65 → 60)
         
         Args:
@@ -268,13 +375,25 @@ class StrategyPerformanceTracker:
         
         for issue in issues:
             if 'false_breakouts' in issue or 'low_volume' in issue:
-                self.adaptive_filters['volume_ratio_min'] = min(3.0, self.adaptive_filters['volume_ratio_min'] + 0.3)
+                current = self.adaptive_filters['volume_ratio_min']
+                self.adaptive_filters['volume_ratio_min'] = min(
+                    self.FILTER_CAPS['volume_ratio_min'],
+                    current + 0.1
+                )
             
             if 'late_entries' in issue or 'overbought' in issue:
-                self.adaptive_filters['rsi_max'] = max(40, self.adaptive_filters['rsi_max'] - 5)
+                current = self.adaptive_filters['rsi_max']
+                self.adaptive_filters['rsi_max'] = max(
+                    self.FILTER_CAPS['rsi_max'],
+                    current - 5
+                )
             
             if 'dead_stock' in issue or 'low_volatility' in issue:
-                self.adaptive_filters['atr_min'] = max(0.1, self.adaptive_filters['atr_min'] - 0.2)
+                current = self.adaptive_filters['atr_min']
+                self.adaptive_filters['atr_min'] = max(
+                    self.FILTER_CAPS['atr_min'],
+                    current - 0.1
+                )
         
         if issues:
             self._save_filters()
@@ -322,6 +441,8 @@ class StrategyPerformanceTracker:
         filepath = os.path.join(self.data_dir, 'strategy_weights.json')
         data = {
             'weights': self.strategy_weights,
+            'context_weights': self.context_weights,
+            'market_condition': self._current_market_condition,
             'updated_at': datetime.now().isoformat()
         }
         try:
@@ -329,6 +450,38 @@ class StrategyPerformanceTracker:
                 json.dump(data, f, indent=2)
         except Exception as e:
             logger.error(f"Error saving weights: {e}")
+    
+    def _load_weights(self) -> None:
+        """Load weights and context weights from file."""
+        filepath = os.path.join(self.data_dir, 'strategy_weights.json')
+        try:
+            if os.path.exists(filepath):
+                with open(filepath, 'r') as f:
+                    data = json.load(f)
+                    if 'weights' in data:
+                        self.strategy_weights.update(data['weights'])
+                    if 'context_weights' in data:
+                        self.context_weights.update(data['context_weights'])
+                    if 'market_condition' in data:
+                        self._current_market_condition = data['market_condition']
+                    logger.info(f"Loaded weights from {filepath}")
+        except Exception as e:
+            logger.error(f"Error loading weights: {e}")
+    
+    def update_context_weight(self, strategy: str, market_condition: str, weight: float) -> None:
+        """Update context-specific weight for a strategy."""
+        context_key = (strategy, market_condition)
+        if context_key in self.context_weights:
+            self.context_weights[context_key] = self._bound_weight(weight)
+            logger.info(f"Updated context weight for {context_key}: {weight}")
+    
+    def get_context_weight(self, strategy: str, market_condition: Optional[str] = None) -> float:
+        """Get effective weight for strategy considering market condition."""
+        condition: str = market_condition if market_condition else self._current_market_condition
+        context_key: Tuple[str, str] = (strategy, condition)
+        base_weight = self.strategy_weights.get(strategy, 0.5)
+        context_multiplier = self.context_weights.get(context_key, 1.0)
+        return round(base_weight * context_multiplier, 3)
     
     def _save_filters(self) -> None:
         filepath = os.path.join(self.data_dir, 'adaptive_filters.json')
@@ -384,11 +537,18 @@ class StrategyPerformanceTracker:
         all_stats = self.get_all_strategy_stats()
         return {
             'strategy_weights': self.strategy_weights,
+            'context_weights': self.context_weights,
             'adaptive_filters': self.adaptive_filters,
+            'filter_caps': self.FILTER_CAPS,
             'performance': all_stats,
             'scores': {
-                s: self._calculate_performance_score(stats)
+                s: stats.get('weighted_score', self._calculate_performance_score(stats))
                 for s, stats in all_stats.items()
+            },
+            'market_condition': self._current_market_condition,
+            'recency_bias': {
+                'recent_weight': self.RECENT_WEIGHT,
+                'old_weight': self.OLD_WEIGHT
             },
             'rank_formula': self.get_rank_score_formula(),
             'optimization_config': {

@@ -81,3 +81,47 @@ According to README these should work but may fail:
 3. **Implement `alert_service.test_connection()` method**  
 4. **Move Telegram credentials to environment variables**
 5. **Add proper error handling for missing methods**
+
+---
+
+### ✅ **IMPLEMENTED FIXES (2026-04-08)**
+
+#### 1. **Proportional Weight Adjustment** ✅
+- **Problem**: Fixed ±0.1 adjustment too linear
+- **Fix**: Now uses `(win_rate - 50) / 100` (range -0.5 to +0.5)
+- **File**: `src/strategy_optimizer.py`
+- **Method**: `_calculate_proportional_adjustment()`
+
+#### 2. **Recency Bias** ✅
+- **Problem**: Last 50 trades had equal weight regardless of age
+- **Fix**: Recent 20 trades weighted 0.7, older trades 0.3
+- **File**: `src/strategy_optimizer.py`
+- **Constants**: `RECENT_WEIGHT = 0.7`, `OLD_WEIGHT = 0.3`
+
+#### 3. **Capped Adaptive Filters** ✅
+- **Problem**: +0.3 increment too aggressive, 3-4 bad cycles made filters too strict
+- **Fix**: 
+  - Capped at maximum values (volume_ratio_min: 2.5, rsi_max: 70)
+  - Smaller increments (+0.1 instead of +0.3)
+- **File**: `src/strategy_optimizer.py`
+- **Constants**: `FILTER_CAPS`
+
+#### 4. **Context-Based Learning (Market Condition)** ✅
+- **Problem**: Single weight per strategy, TREND fails in sideways markets
+- **Fix**: Added `(strategy, market_condition)` context weights:
+  - `('TREND', 'TRENDING')`: 1.2x
+  - `('TREND', 'SIDEWAYS')`: 0.6x
+  - `('MTF', 'TRENDING')`: 1.1x
+  - `('MTF', 'SIDEWAYS')`: 0.7x
+- **File**: `src/strategy_optimizer.py`
+- **Methods**: `set_market_condition()`, `get_context_weight()`, `update_context_weight()`
+
+#### 5. **Enhanced Scoring Logic** ✅
+- **Problem**: Win-rate only scoring
+- **Fix**: Now uses:
+  - Weighted win_rate (with recency bias)
+  - Weighted avg_rr (with recency bias)
+  - Drawdown in score calculation
+  - RR bonus adjustment
+- **File**: `src/strategy_optimizer.py`
+- **Method**: `_calculate_performance_score()`, `get_strategy_stats()`**

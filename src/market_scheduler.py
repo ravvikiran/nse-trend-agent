@@ -22,6 +22,7 @@ class MarketScheduler:
     
     Market Hours: 09:15 AM to 03:30 PM IST
     Scan Interval: Every 15 minutes
+    Special Jobs: 3:00 PM IST update
     """
     
     # Market hours in IST
@@ -33,11 +34,16 @@ class MarketScheduler:
     # Scan interval in minutes
     SCAN_INTERVAL = 15
     
+    # 3PM update time in IST
+    PM_UPDATE_HOUR = 15
+    PM_UPDATE_MINUTE = 0
+    
     def __init__(self):
         """Initialize the MarketScheduler."""
         self.running = False
         self.scheduler_thread = None
         self.scan_callback = None
+        self.pm_update_callback = None
         self.ist = pytz.timezone('Asia/Kolkata')
         logger.debug("MarketScheduler initialized")
     
@@ -144,7 +150,11 @@ class MarketScheduler:
         # Schedule scans every 15 minutes during market hours
         schedule.every(self.SCAN_INTERVAL).minutes.do(self.run_scan)
         
+        # Schedule 3PM update (15:00 IST)
+        schedule.every().day.at("15:00").do(self.run_pm_update)
+        
         logger.debug(f"Scheduled scans every {self.SCAN_INTERVAL} minutes during market hours")
+        logger.debug("Scheduled 3PM update job")
     
     def start(self):
         """Start the scheduler in a background thread."""
