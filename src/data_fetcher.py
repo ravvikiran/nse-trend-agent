@@ -26,15 +26,15 @@ class DataFetcher:
     # Supported timeframes
     TIMEFRAMES = ['1D', '1H', '15m']
     
-    def __init__(self, period: int = 16, interval: str = "1D"):
+    def __init__(self, period: int = 200, interval: str = "1D"):
         """
         Initialize the DataFetcher.
         
         Args:
-            period: Number of days of historical data (default: 16 days for ~250 candles)
+            period: Number of days of historical data (default: 200 days for all EMAs)
             interval: Data interval (default: 1D for daily)
         """
-        self.period = period
+        self.period = max(period, 200)  # Ensure at least 200 days for EMA200
         self.interval = interval
         # Cache for multi-timeframe data
         self._mtf_cache = {}

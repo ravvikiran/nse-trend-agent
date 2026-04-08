@@ -10,8 +10,15 @@ import requests
 import threading
 from typing import Optional, Dict, Any, List, Callable
 from datetime import datetime
-from src.trend_detector import TrendSignal
-from src.ai_stock_analyzer import create_analyzer, AIStockAnalyzer
+try:
+    from src.trend_detector import TrendSignal
+except ImportError:
+    from trend_detector import TrendSignal
+
+try:
+    from src.ai_stock_analyzer import create_analyzer, AIStockAnalyzer
+except ImportError:
+    from ai_stock_analyzer import create_analyzer, AIStockAnalyzer
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -37,31 +44,36 @@ class AlertService:
     ```
     """
     
-    def __init__(self, bot_token: str, chat_id: str):
+    def __init__(self, bot_token: str, chat_id: str, channel_chat_id: str = None):
         """
         Initialize the AlertService.
         
         Args:
             bot_token: Telegram Bot API token
             chat_id: Target chat ID for alerts
+            channel_chat_id: Channel chat ID for sending signals to channels (e.g., -1003801351128)
         """
         self.bot_token = bot_token
         self.chat_id = chat_id
+        self.channel_chat_id = channel_chat_id
         self.api_url = f"https://api.telegram.org/bot{bot_token}"
-        self.enabled = bool(bot_token and chat_id)
+        self.enabled = bool(bot_token and (chat_id or channel_chat_id))
         
         if self.enabled:
             logger.debug("AlertService initialized with Telegram enabled")
+            if channel_chat_id:
+                logger.debug(f"Channel mode enabled: {channel_chat_id}")
         else:
             logger.debug("AlertService initialized with Telegram DISABLED (no credentials)")
     
-    def send_message(self, text: str, parse_mode: str = "Markdown") -> bool:
+    def send_message(self, text: str, parse_mode: str = "Markdown", target_chat_id: str = None) -> bool:
         """
         Send a message via Telegram.
         
         Args:
             text: Message text to send
             parse_mode: Message parse mode (Markdown or HTML)
+            target_chat_id: Override target chat ID (for channel support)
             
         Returns:
             True if message sent successfully, False otherwise
@@ -70,10 +82,17 @@ class AlertService:
             logger.debug(f"Telegram disabled, would have sent: {text[:50]}...")
             return True  # Return True in test mode
         
+        # Determine which chat ID to use: channel_chat_id > target_chat_id > chat_id
+        chat_id = target_chat_id or self.channel_chat_id or self.chat_id
+        
+        if not chat_id:
+            logger.error("No chat ID configured")
+            return False
+        
         try:
             url = f"{self.api_url}/sendMessage"
             payload = {
-                "chat_id": self.chat_id,
+                "chat_id": chat_id,
                 "text": text,
                 "parse_mode": parse_mode
             }
@@ -190,6 +209,22 @@ class AlertService:
         # Otherwise format as TrendSignal
         message = self.format_alert_message(signal)
         return self.send_message(message)
+    
+    def send_to_channel(self, text: str) -> bool:
+        """
+        Send a message to the Telegram channel.
+        
+        Args:
+            text: Message text to send
+            
+        Returns:
+            True if message sent successfully, False otherwise
+        """
+        if not self.channel_chat_id:
+            logger.debug("Channel chat ID not configured, falling back to default chat")
+            return self.send_message(text)
+        
+        return self.send_message(text, target_chat_id=self.channel_chat_id)
     
     def send_batch_alerts(self, signals: List[TrendSignal]) -> int:
         """

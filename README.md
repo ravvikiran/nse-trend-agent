@@ -1,32 +1,51 @@
 # NSE Trend Scanner Agent
 
-Automated trading scanner that monitors ~500 NSE stocks during market hours and detects potential uptrend starts based on EMA alignment and volume confirmation. Includes AI-powered stock analysis via two-way Telegram bot.
+Automated trading scanner that monitors ~500 NSE stocks during market hours and detects potential uptrend starts based on EMA alignment and volume confirmation. Includes AI-powered stock analysis via two-way Telegram bot, Trade Journal System, Auto-Optimization Engine, and AI Learning Layer.
 
 ## Features
 
+### Core Scanning
 - **Stock Universe**: Monitors 500+ NSE stocks (NIFTY 50, NEXT 50, MIDCAP 150, SMALLCAP 250)
 - **Real-time Data**: Uses Yahoo Finance for 1-day (1D) OHLCV data
 - **Technical Indicators**: EMA 20, 50, 100, 200 + Volume MA 30 + RSI + ATR
 - **Trend Detection**: Identifies EMA alignment (EMA20 > EMA50 > EMA100 > EMA200) with volume confirmation
 - **VERC Strategy**: Volume Expansion Range Compression - detects accumulation before breakout
+- **MTF Strategy**: Multi-timeframe confirmation (1D, 1H, 15m) for stronger signals
+
+### Smart Features
 - **Smart Alerts**: Telegram notifications with entry, stop loss, targets, and confidence score
 - **Scheduled Scanning**: Runs every 15 minutes during market hours (09:15 - 15:30 IST)
 - **AI Analysis**: GPT-powered stock analysis with BUY/SELL/HOLD recommendations
 - **Two-way Telegram Bot**: Interactive bot - send stock symbols for instant analysis
-- **Timeframe**: Uses 1-day (1D) data for trend detection
+
+### Learning & Optimization (v2.0)
+- **Trade Journal**: Logs EVERY alert with complete trade data (entry, SL, targets, outcome, RR, indicators)
+- **Strategy Performance Tracker**: Tracks win rate, avg RR, drawdown, holding time per strategy
+- **Auto-Optimization Engine**: Automatically adjusts strategy weights based on performance
+- **Adaptive Filters**: Dynamically adjusts volume_ratio and RSI thresholds
+- **No-Trade Filter**: Avoids signals when ATR too low, choppy candles, or NIFTY unclear
+- **AI Learning Layer** (Strict Mode): Analyzes journal, detects failure patterns, suggests improvements
+
+## System Flow
+
+```
+Scan → Detect → Score → Rank → Select → Alert → Log → Track → Optimize
+```
+
+### Rank Score Formula
+```
+rank_score = (strategy_score * strategy_weight * 0.6) + (volume_score * 0.2) + (breakout_strength * 0.2)
+```
 
 ## Installation
 
 ```bash
-# Clone the repository
 git clone <repository-url>
 cd nse-trend-agent
 
-# Create virtual environment (optional but recommended)
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-# Install dependencies
 pip install -r requirements.txt
 ```
 
@@ -34,11 +53,8 @@ pip install -r requirements.txt
 
 ### 1. Telegram Setup
 
-To receive alerts via Telegram, you have two options:
-
 **Option A: Config File (Recommended)**
 Edit `config/settings.json`:
-
 ```json
 {
   "telegram": {
@@ -49,235 +65,45 @@ Edit `config/settings.json`:
 ```
 
 **Option B: Environment Variables**
-
 ```bash
 # On Windows
 set TELEGRAM_BOT_TOKEN=your_bot_token
 set TELEGRAM_CHAT_ID=your_chat_id
-
-# On Linux/Mac
-export TELEGRAM_BOT_TOKEN=your_bot_token
-export TELEGRAM_CHAT_ID=your_chat_id
 ```
-
-Or pass them as command-line arguments (see Usage below).
 
 ### 2. Stock List
-
-The stock list is configured in [`config/stocks.json`](config/stocks.json). You can modify this file to add/remove stocks. Format:
-
-```json
-["RELIANCE.NS", "HDFCBANK.NS", "TCS.NS"]
-```
+The stock list is configured in [`config/stocks.json`](config/stocks.json).
 
 ### 3. AI Configuration (Optional)
-
-To enable AI-powered stock analysis, you need an OpenAI API key:
-
-**Get API Key:**
-1. Go to https://platform.openai.com/api-keys
-2. Create a new API key
-3. Copy it (it won't be shown again)
-
-**Set Environment Variable:**
-
-```bash
-# On Linux/Mac
-export OPENAI_API_KEY=sk-your-api-key-here
-
-# On Windows
-set OPENAI_API_KEY=sk-your-api-key-here
-```
-
-**Optional: Change Model**
-
-Default model is `gpt-4o-mini`. To use a different model:
-
-```bash
-export OPENAI_MODEL=gpt-4o
-```
+To enable AI-powered stock analysis, set `OPENAI_API_KEY` environment variable.
 
 ## Usage
 
 ### Start Scanner (Runs every 15 minutes during market hours)
-
 ```bash
-# Start the scanner with all strategies
 python -m src.main
-
-# Test run (single scan)
-python -m src.main --test
+python -m src.main --test  # Single scan test
 ```
 
-### Run Specific Strategy Separately
-
-You can run each strategy independently:
-
+### Run Specific Strategy
 ```bash
-# Run ONLY Trend Detection strategy
-python -m src.main --strategy trend
-
-# Run ONLY VERC (Volume Expansion Range Compression) strategy
-python -m src.main --strategy verc
-
-# Run both strategies (default)
-python -m src.main --strategy all
+python -m src.main --strategy trend   # Only Trend Detection
+python -m src.main --strategy verc    # Only VERC
+python -m src.main --strategy all     # All strategies (default)
 ```
 
-#### Examples:
-
+### Enable Telegram Bot
 ```bash
-# Test run with only VERC strategy
-python -m src.main --test --strategy verc
-
-# Test run with only Trend strategy
-python -m src.main --test --strategy trend
-
-# Start scanner with only VERC running in background
-python -m src.main --strategy verc
-```
-
-### Enable Two-Way Telegram Bot
-
-To enable the interactive Telegram bot for stock analysis:
-
-```bash
-# Start scanner with Telegram bot enabled
-python -m src.main --enable-telegram-bot
-
-# With AI analysis (requires OPENAI_API_KEY)
-export OPENAI_API_KEY=your-key
 python -m src.main --enable-telegram-bot
 ```
 
 ### Telegram Bot Commands
-
-When the bot is enabled, you can interact with it in Telegram:
-
 | Command | Description |
 |---------|-------------|
 | `RELIANCE` | Send stock symbol for instant AI analysis |
-| `/analyze RELIANCE` | AI-powered stock analysis with entry/stop/targets |
-| `/trend HDFCBANK` | Technical trend analysis (no AI) |
+| `/analyze RELIANCE` | AI-powered stock analysis |
+| `/trend HDFCBANK` | Technical trend analysis |
 | `/status` | Check scanner status |
-| `/help` | Show help message |
-
-**Note:** The bot will only respond to the configured chat ID.
-
-### Example Alert Message
-
-**Trend Signal:**
-
-```
-📈 TREND SIGNAL
-
-Stock: HDFCBANK
-Time: 2024-01-15 14:45
-
-💰 Price: ₹1680.50
-
-🎯 Entry Zone:
-  Buy Above: ₹1685.20
-
-🛡️ Stop Loss:
-  SL: ₹1648.90 (-1.9%)
-
-🎯 Targets:
-  Target 1: ₹1713.10 (+1.9%)
-  Target 2: ₹1745.70 (+3.9%)
-
-Confidence: 8/10
-
-📊 Indicators:
-  EMA 20: ₹1685.20
-  EMA 50: ₹1675.30
-  Volume: 1,250,000
-  Vol Ratio: 1.28x
-```
-
-**VERC Signal:**
-
-```
-📊 VERC SIGNAL (Accumulation)
-
-Stock: RELIANCE
-
-💰 Current Price: ₹2450.00
-
-🔄 Compression Range:
-  Range: ₹2430.00 - ₹2460.00
-  Range Width: ₹30.00
-
-🎯 Entry Zone:
-  Buy Above: ₹2460.00 - ₹2472.30
-
-🛡️ Stop Loss:
-  SL: ₹2430.00 (-0.8%)
-
-🎯 Targets:
-  Target 1: ₹2490.00 (+1.6%)
-  Target 2: ₹2520.00 (+2.9%)
-
-Confidence: 8/10
-
-📊 Volume:
-  Relative Vol: 1.85x
-  Trend Aligned: Yes
-
-📈 Factors:
-  +Range Compression: 3
-  +Volume Expansion: 2
-  +Index Trend Alignment: 2
-  +Relative Strength: 1
-```
-
-```bash
-cd nse-trend-agent
-python -m src.main
-```
-
-### Run Single Test Scan
-
-```bash
-python -m src.main --test
-```
-
-### Test Telegram Connection
-
-```bash
-python -m src.main --test-telegram
-```
-
-### Run with Mock Alerts (Testing Without Telegram)
-
-```bash
-python -m src.main --mock-alerts --test
-```
-
-### Custom Options
-
-```bash
-python -m src.main \
-  --config config/stocks.json \
-  --telegram-token YOUR_TOKEN \
-  --telegram-chat-id YOUR_CHAT_ID \
-  --log-level DEBUG \
-  --log-file logs/scanner.log
-```
-
-## Command Line Options
-
-| Option               | Description                                 | Default                                   |
-| -------------------- | ------------------------------------------- | ----------------------------------------- |
-| `--strategy`         | Strategy: trend, verc, or all               | `all`                                     |
-| `--config`           | Path to stocks configuration file           | `config/stocks.json`                      |
-| `--telegram-token`   | Telegram bot token                          | Environment variable `TELEGRAM_BOT_TOKEN` |
-| `--telegram-chat-id` | Telegram chat ID                            | Environment variable `TELEGRAM_CHAT_ID`   |
-| `--test`             | Run a single test scan                      | False                                     |
-| `--test-telegram`    | Test Telegram connection                    | False                                     |
-| `--mock-alerts`      | Use mock alert service                      | False                                     |
-| `--log-level`        | Logging level (DEBUG, INFO, WARNING, ERROR) | INFO                                      |
-| `--log-file`         | Log file path                               | `logs/scanner.log`                        |
 
 ## Project Structure
 
@@ -286,165 +112,85 @@ nse-trend-agent/
 ├── config/
 │   ├── settings.json         # Telegram and scanner settings
 │   └── stocks.json          # Stock list configuration
-├── data/                    # Data storage (optional)
+├── data/                    # Data storage (trade journal, history)
 ├── src/
-│   ├── __init__.py          # Package initialization
+│   ├── __init__.py
+│   ├── main.py              # Main entry point
 │   ├── data_fetcher.py      # Yahoo Finance data fetching
-│   ├── indicator_engine.py  # EMA and Volume MA calculations
+│   ├── indicator_engine.py  # EMA, RSI, ATR calculations
 │   ├── trend_detector.py    # Trend detection logic
-│   ├── volume_compression.py # VERC (Volume Expansion Range Compression)
-│   ├── alert_service.py     # Telegram alert handling
-│   ├── scheduler.py         # Market hours scheduling
-│   └── main.py              # Main entry point
+│   ├── volume_compression.py # VERC strategy
+│   ├── mtf_strategy.py      # Multi-timeframe strategy
+│   ├── alert_service.py    # Telegram alerts
+│   ├── scheduler.py        # Market hours scheduling
+│   ├── trade_journal.py    # Trade logging system
+│   ├── strategy_optimizer.py # Performance tracker + auto-opt
+│   └── ai_learning_layer.py # AI analysis (strict mode)
 ├── logs/                    # Log files
-├── requirements.txt         # Python dependencies
-└── README.md               # This file
+├── requirements.txt
+└── README.md
 ```
 
-## How It Works
+## Trade Journal Data Model
 
-### Available Strategies
-
-The scanner supports two independent strategies:
-
-| Strategy            | File                        | Detection Method                                |
-| ------------------- | --------------------------- | ----------------------------------------------- |
-| **Trend Detection** | `src/trend_detector.py`     | EMA20>EMA50>EMA100>EMA200 + Volume confirmation |
-| **VERC**            | `src/volume_compression.py` | Range Compression + Volume Expansion            |
-
-### Trend Detection Logic
-
-A stock is considered in **uptrend alignment** when:
-
-```
-EMA20 > EMA50 > EMA100 > EMA200
-```
-
-**Volume confirmation**:
-
-```
-Current Volume > Volume MA 30
+```python
+trade = {
+  trade_id,
+  symbol,
+  strategy,            # TREND / VERC / MTF
+  entry,
+  stop_loss,
+  targets,
+  timestamp,
+  outcome,             # WIN / LOSS / OPEN / TIMEOUT
+  rr_achieved,
+  max_drawdown,
+  volume_ratio,
+  rsi,
+  trend_score,
+  verc_score,
+  rank_score
+}
 ```
 
-**Trend start detection**:
+## Auto-Optimization Rules
 
+- **Win rate < 40%**: Reduce strategy_weight
+- **Win rate > 60%**: Increase strategy_weight
+
+## Adaptive Filters
+
+- **Too many false breakouts**: Increase volume_ratio (1.5 → 1.8)
+- **Late entries**: Tighten RSI (65 → 60)
+- **Dead stock**: Increase ATR minimum
+
+## No-Trade Conditions
+
+Avoid signals when:
+- ATR very low (dead stock)
+- Choppy candles (wick > body)
+- NIFTY unclear direction (SIDEWAYS)
+
+## AI Learning Layer (Strict Mode)
+
+AI does NOT control signals. AI role:
+- Analyze journal data
+- Detect failure patterns
+- Suggest parameter improvements
+
+Example output:
 ```
-Previous Candle: EMA20 <= EMA50
-Current Candle:  EMA20 > EMA50
+Insight:
+- TREND failing in low volume stocks
+- Suggest increasing volume threshold
 ```
-
-This signals the beginning of a potential bullish trend.
-
-### VERC (Volume Expansion Range Compression) Strategy
-
-Detects stocks that are quietly being accumulated by institutions before a breakout.
-
-**Detection Criteria:**
-
-- **Range Compression**: Price range (High-Low) < 5% of current price, OR ATR(14) is at local minimum
-- **Volume Expansion**: Volume MA(5) > Volume MA(20), OR Relative Volume > 1.3
-- **Trend Alignment**: Price > EMA50, OR EMA20 > EMA50
-
-**Signal Generation:**
-
-- Confidence score ≥ 7 required to generate alert
-- Scoring: Range Compression (+3), Volume Expansion (+2), Breakout Volume (+2), Index Trend Alignment (+2), Relative Strength (+1)
-
-**Alert Output:**
-
-```
-ACCUMULATION BREAKOUT
-
-Stock: HDFCBANK
-
-Compression Detected
-Range: 1675.00 – 1685.00
-
-Entry: 1685.00 – 1693.42
-Stop: 1675.00
-
-Target 1: 1695.00
-Target 2: 1705.00
-
-Confidence: 8/10
-
-Factors:
-  +Range Compression: 3
-  +Volume Expansion: 2
-  +Index Trend Alignment: 2
-  +Relative Strength: 1
-```
-
-### Alert Message Format
-
-```
-🚨 TREND ALERT
-
-📌 Stock: HDFCBANK
-⏰ Time: 2024-01-15 10:30:00
-📊 Timeframe: 1D
-
-Signal Type: 🎯 New Uptrend Starting
-
-Price: ₹1680.50
-EMA Alignment:
-  • EMA 20: ₹1685.20
-  • EMA 50: ₹1675.30
-  • EMA 100: ₹1660.40
-  • EMA 200: ₹1645.50
-
-Volume:
-  • Current: 1,250,000
-  • MA 30: 980,000
-  • Ratio: 1.28x
-
-EMA Alignment: 20 > 50 > 100 > 200
-```
-
-### Duplicate Alert Prevention
-
-The system maintains an in-memory set (`alerted_today`) to prevent duplicate alerts. This list resets daily at midnight.
 
 ## Performance
 
-- **Scanning 500 stocks**: 10-30 seconds per scan cycle
-- **Memory usage**: Below 1GB
-- **Scan Time**: Every 15 minutes during market hours (09:15 - 15:30 IST)
-
-## Troubleshooting
-
-### No Data Fetched
-
-- Check internet connection
-- Verify Yahoo Finance is accessible
-- Some stocks may have limited data availability
-
-### Telegram Alerts Not Working
-
-- Verify bot token and chat ID
-- Start a chat with your bot first
-- Check bot permissions
-
-### High Memory Usage
-
-- Reduce the number of stocks being monitored
-- Run during market hours only
-
-## Future Improvements
-
-- Multi-timeframe confirmation (15m + 1h + daily)
-- RSI momentum filter
-- Relative volume spikes
-- ✅ AI-based trend strength analysis *(Implemented)*
-- ✅ Two-way Telegram bot *(Implemented)*
-- Web dashboard for signal history
-- Backtesting engine
-- VPS deployment for 24/7 reliability
-
-## License
-
-MIT License
+- **Scanning 500 stocks**: 10-30 seconds per scan
+- **Scan Interval**: Every 15 minutes during market hours
+- **Trade expiry**: 10-15 days
 
 ## Disclaimer
 
-This software is for educational purposes only. Trading in financial markets involves substantial risk. Always do your own research before making investment decisions.
+This software is for educational purposes only. Trading in financial markets involves substantial risk. Always do your own research.

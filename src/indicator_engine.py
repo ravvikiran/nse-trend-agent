@@ -10,7 +10,7 @@ from ta.trend import EMAIndicator, SMAIndicator, MACD
 from ta.volatility import AverageTrueRange
 from ta.momentum import RSIIndicator
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from datetime import datetime
 
 # Configure logging
@@ -23,13 +23,17 @@ class IndicatorEngine:
     
     Indicators:
         - EMA 20, 50, 100, 200
-        - Volume Moving Average (MA 30)
+        - Volume Moving Average (MA 5, 20, 30)
+        - RSI (14)
+        - ATR (14)
+        - 20-day High / Low
     """
     
     def __init__(self):
         """Initialize the IndicatorEngine."""
         self.ema_periods = [20, 50, 100, 200]
-        self.volume_ma_period = 30
+        self.volume_ma_periods = [5, 20, 30]
+        self.high_low_period = 20
     
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -66,9 +70,13 @@ class IndicatorEngine:
             ema_200 = EMAIndicator(close=result_df['close'], window=200)
             result_df['ema_200'] = ema_200.ema_indicator()
             
-            # Volume Moving Average
-            volume_sma = SMAIndicator(close=result_df['volume'], window=30)
-            result_df['volume_ma'] = volume_sma.sma_indicator()
+            # Volume Moving Average (5, 20, 30)
+            for period in [5, 20, 30]:
+                volume_sma = SMAIndicator(close=result_df['volume'], window=period)
+                result_df[f'volume_ma_{period}'] = volume_sma.sma_indicator()
+            
+            # Also keep old name for backward compatibility
+            result_df['volume_ma'] = result_df['volume_ma_30']
             
             # Additional useful indicators
             # RSI
@@ -85,8 +93,19 @@ class IndicatorEngine:
             result_df['MACD_Signal'] = macd.macd_signal()
             result_df['MACD_Hist'] = macd.macd_diff()
             
-            # Drop NaN values that may result from indicator calculations
-            result_df.dropna(inplace=True)
+            # 20-day High / Low
+            result_df['high_20'] = result_df['high'].rolling(window=20).max()
+            result_df['low_20'] = result_df['low'].rolling(window=20).min()
+            
+            # Average volume 20 and 30
+            result_df['avg_volume_20'] = result_df['volume'].rolling(window=20).mean()
+            result_df['avg_volume_30'] = result_df['volume'].rolling(window=30).mean()
+            
+            # For scoring, we only need the latest row to be valid for key indicators
+            # Don't drop all NaN - instead, fill with method that allows partial data
+            # Keep rows that have at least the essential indicators (EMA20, EMA50, RSI, volume)
+            essential_cols = ['ema_20', 'ema_50', 'rsi', 'volume_ma']
+            result_df = result_df.dropna(subset=essential_cols)
             
             logger.debug(f"Calculated indicators for {len(result_df)} candles")
             return result_df
@@ -124,11 +143,18 @@ class IndicatorEngine:
                 'ema_100': latest['ema_100'],
                 'ema_200': latest['ema_200'],
                 'volume_ma': latest['volume_ma'],
+                'volume_ma_5': latest.get('volume_ma_5'),
+                'volume_ma_20': latest.get('volume_ma_20'),
+                'volume_ma_30': latest.get('volume_ma_30'),
+                'avg_volume_20': latest.get('avg_volume_20'),
+                'avg_volume_30': latest.get('avg_volume_30'),
                 'rsi': latest.get('rsi'),
                 'atr': latest.get('atr'),
                 'macd': latest.get('macd'),
                 'macd_signal': latest.get('macd_signal'),
                 'macd_hist': latest.get('macd_hist'),
+                'high_20': latest.get('high_20'),
+                'low_20': latest.get('low_20'),
                 # Previous candle values for trend detection
                 'prev_ema_20': previous['ema_20'],
                 'prev_ema_50': previous['ema_50'],
@@ -318,3 +344,82 @@ class IndicatorEngine:
         except Exception as e:
             logger.error(f"Error checking volume expansion: {str(e)}")
             return False
+    
+    def check_price_breakout(self, indicators: Dict[str, Any]) -> bool:
+        """
+        Check if price has broken above 20-day high.
+        
+        Rule: close > highest_high(last 20 days)
+        
+        Args:
+            indicators: Dictionary with indicator values
+            
+        Returns:
+            True if price breakout detected, False otherwise
+        """
+        try:
+            close = indicators.get('close', 0)
+            high_20 = indicators.get('high_20')
+            
+            if high_20 is None:
+                return False
+            
+            return close > high_20
+            
+        except Exception as e:
+            logger.error(f"Error checking price breakout: {str(e)}")
+            return False
+    
+    def check_volume_ratio(self, indicators: Dict[str, Any], min_ratio: float = 1.5) -> Tuple[bool, float]:
+        """
+        Check if volume ratio meets threshold.
+        
+        Rule: volume_ratio = current_volume / avg_volume_20 >= min_ratio
+        
+        Args:
+            indicators: Dictionary with indicator values
+            min_ratio: Minimum volume ratio (default 1.5)
+            
+        Returns:
+            Tuple of (meets_threshold, volume_ratio)
+        """
+        try:
+            volume = indicators.get('volume', 0)
+            avg_volume_20 = indicators.get('avg_volume_20')
+            
+            if avg_volume_20 is None or avg_volume_20 == 0:
+                return False, 0.0
+            
+            volume_ratio = volume / avg_volume_20
+            return volume_ratio >= min_ratio, volume_ratio
+            
+        except Exception as e:
+            logger.error(f"Error checking volume ratio: {str(e)}")
+            return False, 0.0
+    
+    def check_rsi_zone(self, indicators: Dict[str, Any]) -> Tuple[str, float]:
+        """
+        Check RSI zone for the signal.
+        
+        Returns:
+            Tuple of (zone, rsi_value)
+            zone: 'ideal' (50-65), 'overbought' (>75), 'weak' (<45), or 'neutral'
+        """
+        try:
+            rsi = indicators.get('rsi')
+            
+            if rsi is None:
+                return 'unknown', 0.0
+            
+            if rsi > 75:
+                return 'overbought', rsi
+            elif rsi >= 50 and rsi <= 65:
+                return 'ideal', rsi
+            elif rsi < 45:
+                return 'weak', rsi
+            else:
+                return 'neutral', rsi
+                
+        except Exception as e:
+            logger.error(f"Error checking RSI zone: {str(e)}")
+            return 'unknown', 0.0

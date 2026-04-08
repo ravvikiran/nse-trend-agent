@@ -9,8 +9,15 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 import json
 
-from .data_fetcher import DataFetcher
-from .history_manager import HistoryManager
+try:
+    from .data_fetcher import DataFetcher
+except ImportError:
+    from data_fetcher import DataFetcher
+
+try:
+    from .history_manager import HistoryManager
+except ImportError:
+    from history_manager import HistoryManager
 
 logger = logging.getLogger(__name__)
 

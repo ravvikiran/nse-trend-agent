@@ -36,6 +36,9 @@ class VERCSignal:
     volume_ratio: float
     relative_volume: float
     trend_aligned: bool
+    verc_score: int = 0
+    rsi_value: float = 0.0
+    breakout_strength: float = 0.0
 
 
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:

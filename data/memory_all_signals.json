@@ -1,0 +1,26 @@
+{
+  "version": "1.0",
+  "last_updated": "2026-04-08T14:29:36.927074",
+  "signals": [
+    {
+      "stock_symbol": "TITAN.NS",
+      "signal_type": "TREND",
+      "entry_price": 4464.0,
+      "target_price": 0,
+      "sl_price": 0,
+      "confidence_score": 50,
+      "signal_id": "TREND_TITAN.NS_6a77ebf1",
+      "generated_at": "2026-04-08T14:27:40.401400"
+    },
+    {
+      "stock_symbol": "BSE.NS",
+      "signal_type": "TREND",
+      "entry_price": 3170.199951171875,
+      "target_price": 0,
+      "sl_price": 0,
+      "confidence_score": 50,
+      "signal_id": "TREND_BSE.NS_7ba9e579",
+      "generated_at": "2026-04-08T14:29:36.927074"
+    }
+  ]
+}

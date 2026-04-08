@@ -599,9 +599,16 @@ class ReasoningEngine:
         Returns:
             Tuple of (recommendation, final_score, explanation)
         """
-        # Weight for combining: 70% weighted, 30% AI
-        ai_weight = 0.3
-        weighted_weight = 0.7
+        # Get weights from config - support rule_based vs ai_reasoning percentages
+        # If weights config has rule_based and ai_reasoning, use them directly
+        rule_weight = self.config.get('weights', {}).get('rule_based', 70) / 100.0
+        ai_weight = self.config.get('weights', {}).get('ai_reasoning', 30) / 100.0
+        
+        # Normalize if needed
+        total = rule_weight + ai_weight
+        if total > 0:
+            rule_weight = rule_weight / total
+            ai_weight = ai_weight / total
         
         # Start with weighted score
         base_score = weighted_score.final_score
@@ -609,7 +616,7 @@ class ReasoningEngine:
         # Adjust with AI confidence if available
         if ai_reasoning:
             ai_score = ai_reasoning.confidence * 10  # Convert 1-10 to 10-100
-            final_score = (base_score * weighted_weight) + (ai_score * ai_weight)
+            final_score = (base_score * rule_weight) + (ai_score * ai_weight)
             
             # AI recommendation alignment
             if ai_reasoning.recommendation == 'SELL' or ai_reasoning.recommendation == 'STRONG_SELL':

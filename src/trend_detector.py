@@ -2,11 +2,19 @@
 Trend Detector Module
 
 Detects potential uptrend starts based on EMA alignment and volume confirmation.
+Implements PRD v2.0 scoring system:
+- EMA Alignment: +3
+- Fresh Crossover: +2
+- Price Breakout (20-day high): +2
+- Volume Spike (>=1.5x): +2
+- RSI Ideal Zone (50-65): +1
+
+Signal threshold: score >= 6
 """
 
 import pandas as pd
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime
 
 # Configure logging
@@ -23,6 +31,14 @@ class TrendSignal:
         self.indicators = indicators
         self.signal_type = signal_type
         self.message = message
+        self.trend_score = 0
+        self.score_breakdown = {}
+        self.strategy_type = ""
+        self.strategy_score = 0
+        self.volume_ratio = 0.0
+        self.breakout_strength = 0.0
+        self.rank_score = 0.0
+        self.alert = ""
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -30,11 +46,13 @@ class TrendSignal:
             'timestamp': self.timestamp.isoformat() if isinstance(self.timestamp, datetime) else str(self.timestamp),
             'signal_type': self.signal_type,
             'message': self.message,
-            'indicators': self.indicators
+            'indicators': self.indicators,
+            'trend_score': self.trend_score,
+            'score_breakdown': self.score_breakdown
         }
     
     def __repr__(self):
-        return f"TrendSignal(ticker={self.ticker}, type={self.signal_type}, time={self.timestamp})"
+        return f"TrendSignal(ticker={self.ticker}, type={self.signal_type}, score={self.trend_score}, time={self.timestamp})"
 
 
 class ScanResult:
@@ -61,16 +79,87 @@ class ScanResult:
 
 class TrendDetector:
     """
-    Detects potential uptrend starts based on:
-    1. EMA alignment (EMA20 > EMA50 > EMA100 > EMA200)
-    2. Volume confirmation (Volume > Volume MA 30)
-    3. Trend start detection (crossover of EMA20 over EMA50)
+    Detects potential uptrend starts based on PRD v2.0 scoring:
+    1. EMA alignment (EMA20 > EMA50 > EMA100 > EMA200): +3
+    2. Fresh crossover (EMA20 crosses above EMA50): +2
+    3. Price breakout (above 20-day high): +2
+    4. Volume spike (>=1.5x average): +2
+    5. RSI ideal zone (50-65): +1
+    
+    Signal threshold: score >= 6
     """
     
     def __init__(self):
         """Initialize the TrendDetector."""
         self.alerted_today = set()
         self.last_reset_date = None
+    
+    def calculate_trend_score(self, indicators: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> Tuple[int, Dict[str, int]]:
+        """
+        Calculate trend score based on PRD v2.0 criteria.
+        
+        Args:
+            indicators: Dictionary with indicator values
+            df: DataFrame with price data (optional, for additional checks)
+            
+        Returns:
+            Tuple of (total_score, score_breakdown_dict)
+        """
+        score = 0
+        breakdown = {}
+        
+        from indicator_engine import IndicatorEngine
+        engine = IndicatorEngine()
+        
+        # 1. EMA Alignment (+3)
+        ema_alignment = engine.check_ema_alignment(indicators)
+        breakdown['EMA Alignment'] = 3 if ema_alignment else 0
+        score += breakdown['EMA Alignment']
+        
+        # 2. Fresh Crossover (+2)
+        # Previous: EMA20 <= EMA50, Current: EMA20 > EMA50
+        prev_ema_20 = indicators.get('prev_ema_20', 0)
+        prev_ema_50 = indicators.get('prev_ema_50', 0)
+        curr_ema_20 = indicators.get('ema_20', 0)
+        curr_ema_50 = indicators.get('ema_50', 0)
+        
+        fresh_crossover = (prev_ema_20 <= prev_ema_50) and (curr_ema_20 > curr_ema_50)
+        breakdown['Fresh Crossover'] = 2 if fresh_crossover else 0
+        score += breakdown['Fresh Crossover']
+        
+        # 3. Price Breakout - 20-day high (+2)
+        price_breakout = engine.check_price_breakout(indicators)
+        breakdown['Price Breakout'] = 2 if price_breakout else 0
+        score += breakdown['Price Breakout']
+        
+        # 4. Volume Spike - >=1.5x average (+2)
+        volume_strong, volume_ratio = engine.check_volume_ratio(indicators, min_ratio=1.5)
+        breakdown['Volume Spike'] = 2 if volume_strong else 0
+        score += breakdown['Volume Spike']
+        
+        # Store volume ratio in indicators for later use
+        indicators['volume_ratio'] = volume_ratio
+        
+        # 5. RSI Ideal Zone - 50-65 (+1)
+        rsi_zone, rsi_value = engine.check_rsi_zone(indicators)
+        indicators['rsi_zone'] = rsi_zone
+        indicators['rsi_value'] = rsi_value
+        
+        if rsi_zone == 'ideal':
+            breakdown['RSI Ideal'] = 1
+            score += 1
+        elif rsi_zone == 'overbought':
+            breakdown['RSI Overbought'] = -1  # Penalty for overbought
+            score -= 1
+        elif rsi_zone == 'weak':
+            breakdown['RSI Weak'] = 0
+        else:
+            breakdown['RSI Neutral'] = 0
+        
+        # Ensure minimum score is 0
+        score = max(0, score)
+        
+        return score, breakdown
     
     def check_trend_conditions(self, indicators: Dict[str, Any]) -> Dict[str, bool]:
         """
@@ -82,10 +171,11 @@ class TrendDetector:
         Returns:
             Dictionary with condition results
         """
-        from src.indicator_engine import IndicatorEngine
-        
+        try:
+            from indicator_engine import IndicatorEngine
+        except ImportError:
+            from indicator_engine import IndicatorEngine
         engine = IndicatorEngine()
-        
         return {
             'ema_alignment': engine.check_ema_alignment(indicators),
             'volume_confirmation': engine.check_volume_confirmation(indicators),
@@ -102,10 +192,11 @@ class TrendDetector:
         Returns:
             Dictionary with scan condition results
         """
-        from src.indicator_engine import IndicatorEngine
-        
+        try:
+            from indicator_engine import IndicatorEngine
+        except ImportError:
+            from indicator_engine import IndicatorEngine
         engine = IndicatorEngine()
-        
         return {
             'scan_a_trend_structure': engine.check_trend_structure(indicators),
             'scan_b_volume_expansion': engine.check_volume_expansion(indicators)
@@ -126,7 +217,10 @@ class TrendDetector:
             return None
         
         try:
-            from src.indicator_engine import IndicatorEngine
+            try:
+                from indicator_engine import IndicatorEngine
+            except ImportError:
+                from indicator_engine import IndicatorEngine
             
             engine = IndicatorEngine()
             
@@ -148,44 +242,31 @@ class TrendDetector:
                 logger.debug(f"{ticker} already alerted today, skipping")
                 return None
             
-            # Check trend conditions
-            conditions = self.check_trend_conditions(indicators)
+            # Calculate trend score using PRD v2.0 scoring
+            trend_score, score_breakdown = self.calculate_trend_score(indicators, df)
             
-            # Log the conditions for debugging
-            logger.debug(f"{ticker} - EMA Alignment: {conditions['ema_alignment']}, "
-                        f"Volume Conf: {conditions['volume_confirmation']}, "
-                        f"Trend Start: {conditions['trend_start']}")
+            # Store score in indicators
+            indicators['trend_score'] = trend_score
+            indicators['score_breakdown'] = score_breakdown
             
-            # Determine signal type
-            signal_type = None
-            message = ""
+            # Log scoring details
+            logger.debug(f"{ticker} - Trend Score: {trend_score}/10, Breakdown: {score_breakdown}")
             
-            # Check for trend start (primary signal)
-            if conditions['trend_start'] and conditions['ema_alignment'] and conditions['volume_confirmation']:
-                signal_type = "TREND_START"
-                message = "🎯 New Uptrend Starting"
-            
-            # Check for EMA alignment with volume (potential trend)
-            elif conditions['ema_alignment'] and conditions['volume_confirmation']:
-                signal_type = "EMA_ALIGNMENT"
-                message = "📈 EMA Alignment Confirmed"
-            
-            # Check for volume spike (early warning)
-            elif conditions['volume_confirmation']:
-                signal_type = "VOLUME_SPIKE"
-                message = "⚡ Volume Spike"
-            
-            if signal_type:
+            # PRD Signal Rule: trend_signal = score >= 6
+            if trend_score >= 6:
                 # Add to alerted set
                 self.alerted_today.add(ticker)
                 
-                return TrendSignal(
+                signal = TrendSignal(
                     ticker=ticker,
                     timestamp=indicators['timestamp'],
                     indicators=indicators,
-                    signal_type=signal_type,
-                    message=message
+                    signal_type="TREND",
+                    message=f"TREND Signal - Score: {trend_score}/10"
                 )
+                signal.trend_score = trend_score
+                signal.score_breakdown = score_breakdown
+                return signal
             
             return None
             
@@ -221,33 +302,26 @@ class TrendDetector:
     
     def analyze_multiple_stocks_with_scans(self, stocks_data: Dict[str, pd.DataFrame]) -> ScanResult:
         """
-        Analyze multiple stocks using both Scan A and Scan B.
+        Analyze multiple stocks using PRD v2.0 scoring system.
         
-        Scan A - Trend Structure:
-        Close > EMA20 > EMA50 > EMA100 > EMA200
-        
-        Scan B - Volume Expansion:
-        Volume > SMA(Volume, 30) AND Close > EMA20
-        
-        Returns stocks that pass BOTH scans (intersection).
+        Returns stocks sorted by trend score.
         
         Args:
             stocks_data: Dictionary mapping ticker to DataFrame
             
         Returns:
-            ScanResult containing Scan A, Scan B, and Intersection lists
+            ScanResult containing signals and their scores
         """
         scan_a_signals = []
         scan_b_signals = []
-        
-
+        scored_signals = []
         
         for ticker, df in stocks_data.items():
             try:
                 if df is None or df.empty:
                     continue
                 
-                from src.indicator_engine import IndicatorEngine
+                from indicator_engine import IndicatorEngine
                 engine = IndicatorEngine()
                 
                 # Calculate indicators
@@ -263,78 +337,68 @@ class TrendDetector:
                 if indicators is None:
                     continue
                 
-                # Check scan conditions
-                scan_conditions = self.check_scan_conditions(indicators)
+                # Calculate trend score
+                trend_score, score_breakdown = self.calculate_trend_score(indicators, df)
+                indicators['trend_score'] = trend_score
+                indicators['score_breakdown'] = score_breakdown
                 
-                logger.debug(f"{ticker} - ScanA: {scan_conditions['scan_a_trend_structure']}, "
-                           f"ScanB: {scan_conditions['scan_b_volume_expansion']}")
+                # Get volume ratio
+                _, volume_ratio = engine.check_volume_ratio(indicators, min_ratio=1.0)
+                indicators['volume_ratio'] = volume_ratio
+                
+                # Get RSI zone
+                rsi_zone, rsi_value = engine.check_rsi_zone(indicators)
+                indicators['rsi_zone'] = rsi_zone
+                indicators['rsi_value'] = rsi_value
+                
+                logger.debug(f"{ticker} - Score: {trend_score}/10, Breakdown: {score_breakdown}")
                 
                 # Check if already alerted today
                 already_alerted = ticker in self.alerted_today
                 
-                # Scan A - Trend Structure
-                if scan_conditions['scan_a_trend_structure']:
-                    signal_type = "SCAN_A_TREND_STRUCTURE"
-                    message = "📈 Trend Structure: Close > EMA20 > EMA50 > EMA100 > EMA200"
+                # Score-based classification
+                if trend_score >= 6:
+                    signal_type = "TREND"
                     
-                    scan_a_signals.append(TrendSignal(
+                    signal = TrendSignal(
                         ticker=ticker,
                         timestamp=indicators['timestamp'],
                         indicators=indicators,
                         signal_type=signal_type,
-                        message=message
-                    ))
-
-                
-                # Scan B - Volume Expansion
-                if scan_conditions['scan_b_volume_expansion']:
-                    signal_type = "SCAN_B_VOLUME_EXPANSION"
-                    message = "📊 Volume Expansion: Volume > SMA30 & Close > EMA20"
+                        message=f"TREND Signal - Score: {trend_score}/10"
+                    )
+                    signal.trend_score = trend_score
+                    signal.score_breakdown = score_breakdown
                     
+                    scored_signals.append(signal)
+                    
+                    # Also add to scan_a (for backward compat)
+                    scan_a_signals.append(signal)
+                    
+                    # Track in alerted set
+                    if not already_alerted:
+                        self.alerted_today.add(ticker)
+                elif trend_score >= 4:
+                    # Potential but not strong enough
                     scan_b_signals.append(TrendSignal(
                         ticker=ticker,
                         timestamp=indicators['timestamp'],
                         indicators=indicators,
-                        signal_type=signal_type,
-                        message=message
+                        signal_type="POTENTIAL",
+                        message=f"Potential - Score: {trend_score}/10"
                     ))
-
-                
-                # Intersection - both scans passed
-                if scan_conditions['scan_a_trend_structure'] and scan_conditions['scan_b_volume_expansion']:
-                    if not already_alerted:
-                        self.alerted_today.add(ticker)
-                    
-
-                    
+            
             except Exception as e:
                 logger.error(f"Error analyzing {ticker}: {str(e)}")
         
-        # Calculate intersection (stocks that pass both scans)
-        scan_a_tickers = {s.ticker for s in scan_a_signals}
-        scan_b_tickers = {s.ticker for s in scan_b_signals}
-        intersection_tickers = scan_a_tickers & scan_b_tickers
-        
-        # Get the intersection signals
-        all_signals = scan_a_signals + scan_b_signals
-        intersection_signals = [s for s in all_signals if s.ticker in intersection_tickers]
-        
-        # Remove duplicates from intersection (keep one per ticker)
-        seen = set()
-        unique_intersection = []
-        for s in intersection_signals:
-            if s.ticker not in seen:
-                seen.add(s.ticker)
-                s.signal_type = "INTERSECTION"
-                s.message = "🎯 INTERSECTION: Passes BOTH Trend Structure & Volume Expansion"
-                unique_intersection.append(s)
-        
-
+        # Sort by trend score
+        scored_signals.sort(key=lambda x: x.trend_score, reverse=True)
+        scan_a_signals.sort(key=lambda x: x.trend_score, reverse=True)
         
         return ScanResult(
             scan_a=scan_a_signals,
             scan_b=scan_b_signals,
-            intersection=unique_intersection
+            intersection=scored_signals[:5]  # Top 5 max
         )
     
     def should_alert(self, ticker: str) -> bool:

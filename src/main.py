@@ -23,7 +23,7 @@ from data_fetcher import DataFetcher
 from indicator_engine import IndicatorEngine
 from trend_detector import TrendDetector
 from alert_service import AlertService, TelegramBotHandler
-from scheduler import MarketScheduler
+from market_scheduler import MarketScheduler
 from volume_compression import scan_stocks as verc_scan_stocks
 from ai_stock_analyzer import create_analyzer
 
@@ -34,8 +34,17 @@ from signal_tracker import create_signal_tracker
 from performance_tracker import create_performance_tracker
 from notification_manager import create_notification_manager
 
+# New modules for Memory and AI-driven rules
+from signal_memory import create_signal_memory
+from ai_rules_engine import create_ai_rules_engine
+
 # New MTF Strategy Module
 from mtf_strategy import MTFStrategyScanner, format_mtf_signal_alert, create_mtf_scanner
+
+# Trade Journal & Strategy Performance
+from trade_journal import create_trade_journal
+from strategy_optimizer import create_strategy_performance_tracker
+from ai_learning_layer import create_ai_learning_layer
 
 
 def setup_logging(log_level='INFO', log_file='logs/scanner.log'):
@@ -64,7 +73,7 @@ class NSETrendScanner:
     """Main scanner class that coordinates all components."""
     
     def __init__(self, config_path='config/stocks.json', telegram_token=None, 
-                 telegram_chat_id=None, use_mock_alerts=False, strategy='all',
+                 telegram_chat_id=None, telegram_channel_chat_id=None, use_mock_alerts=False, strategy='all',
                  enable_telegram_bot=False):
         """Initialize the scanner with all components."""
         # Load configuration
@@ -72,6 +81,7 @@ class NSETrendScanner:
         self.strategy = strategy
         self.telegram_token = telegram_token
         self.telegram_chat_id = telegram_chat_id
+        self.telegram_channel_chat_id = telegram_channel_chat_id
         self._load_config()
         self._load_settings()
         
@@ -85,7 +95,9 @@ class NSETrendScanner:
             from alert_service import MockAlertService
             self.alert_service = MockAlertService()
         else:
-            self.alert_service = AlertService(telegram_token, telegram_chat_id)
+            # Prefer channel chat ID over personal chat ID
+            target_chat_id = telegram_channel_chat_id or telegram_chat_id
+            self.alert_service = AlertService(telegram_token, target_chat_id, telegram_channel_chat_id)
         
         # Initialize AI analyzer
         self.ai_analyzer = create_analyzer()
@@ -121,10 +133,30 @@ class NSETrendScanner:
         # Notification Manager - handles outcome alerts and reports
         self.notification_manager = create_notification_manager(self.alert_service, self.history_manager, self.performance_tracker)
         
+        # ==================== NEW: Signal Memory (Deduplication) ====================
+        self.signal_memory = create_signal_memory()
+        
+        # Sync memory with history manager
+        self.signal_memory.sync_with_history_manager(self.history_manager)
+        
+        # ==================== NEW: AI-Driven Rules Engine ====================
+        self.ai_rules_engine = create_ai_rules_engine(self.ai_analyzer)
+        
         # ==================== MTF Strategy Scanner ====================
         # Multi-timeframe strategy (Trend + Pullback + Confirmation)
         self.mtf_scanner = create_mtf_scanner()
         self.mtf_scanner.set_data_fetcher(self.data_fetcher)
+        
+        # ==================== Trade Journal & Performance ====================
+        self.trade_journal = create_trade_journal()
+        
+        self.strategy_optimizer = create_strategy_performance_tracker(self.trade_journal)
+        
+        self.ai_learning_layer = create_ai_learning_layer(
+            self.trade_journal, 
+            self.strategy_optimizer,
+            self.ai_analyzer
+        )
         
         # Signal tracking interval (check every N scans)
         self.signal_check_interval = self.settings.get('learning', {}).get('signal_tracking', {}).get('check_interval_scans', 4)
@@ -194,6 +226,12 @@ class NSETrendScanner:
                 self.settings = {}
         else:
             self.settings = {}
+        
+        # Override telegram channel chat ID from environment variable if set
+        env_channel_id = os.environ.get('TELEGRAM_CHANNEL_ID')
+        if env_channel_id and 'telegram' in self.settings:
+            self.settings['telegram']['channel_chat_id'] = env_channel_id
+            logger.info(f"Channel chat ID loaded from TELEGRAM_CHANNEL_ID env var")
     
     def scan(self):
         """
@@ -281,6 +319,8 @@ class NSETrendScanner:
             
             # Send alerts for valid MTF signals
             current_signals = set()
+            target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
+            
             for signal in mtf_signals:
                 signal_key = f"MTF:{signal.ticker}"
                 current_signals.add(signal_key)
@@ -288,7 +328,7 @@ class NSETrendScanner:
                 if signal_key not in self.previous_signals:
                     try:
                         alert = format_mtf_signal_alert(signal)
-                        self.alert_service.send_alert(alert)
+                        target_method(alert)
                         self.total_signals += 1
                     except Exception as e:
                         logger.error(f"Error sending MTF alert: {e}")
@@ -302,63 +342,101 @@ class NSETrendScanner:
     def _run_all_strategies(self, stocks_data):
         """
         Run strategy based on configuration (Trend, VERC, or both).
-        Filters out repeat signals.
+        Implements unified ranking system from PRD v2.0:
+        - rank_score = strategy_score * 0.6 + volume_score * 0.2 + breakout_strength * 0.2
+        - TREND signals take priority over VERC signals
+        - Max 5 signals per scan
         """
-        all_alerts = []
+        excluded_stocks = self.signal_memory.get_excluded_stocks()
+        
+        all_signals = []
         current_signals = set()
         
-        # Run Trend Detection if strategy is 'trend' or 'all'
         if self.strategy in ['trend', 'all']:
             trend_signals = self._get_trend_signals(stocks_data)
-            
-            # Limit to top N trend signals
-            max_signals = self.settings.get('scanner', {}).get('max_signals_per_strategy', 2)
-            trend_signals = trend_signals[:max_signals] if trend_signals else []
-            
             for signal in trend_signals:
-                signal_key = f"TREND:{signal.ticker}"
+                if signal.ticker not in excluded_stocks:
+                    signal.strategy_type = 'TREND'
+                    signal.strategy_score = signal.trend_score if hasattr(signal, 'trend_score') else 0
+                    signal.volume_ratio = signal.indicators.get('volume_ratio', 0)
+                    signal.breakout_strength = self._calculate_breakout_strength(signal.indicators)
+                    signal.rank_score = self._calculate_rank_score(signal)
+                    all_signals.append(signal)
+        
+        if self.strategy in ['verc', 'all']:
+            verc_signals = self._get_verc_signals(stocks_data)
+            for signal in verc_signals:
+                if signal.stock_symbol not in excluded_stocks:
+                    signal.strategy_type = 'VERC'
+                    signal.strategy_score = signal.confidence_score if hasattr(signal, 'confidence_score') else 0
+                    signal.volume_ratio = signal.relative_volume if hasattr(signal, 'relative_volume') else 0
+                    signal.breakout_strength = 0
+                    signal.rank_score = self._calculate_rank_score(signal)
+                    all_signals.append(signal)
+        
+        all_signals.sort(key=lambda x: x.rank_score, reverse=True)
+        
+        final_signals = []
+        seen_tickers = set()
+        
+        for signal in all_signals:
+            ticker = signal.ticker if hasattr(signal, 'ticker') else signal.stock_symbol
+            
+            if ticker in seen_tickers:
+                continue
+            
+            seen_tickers.add(ticker)
+            signal_key = f"{signal.strategy_type}:{ticker}"
+            
+            if not self.signal_memory.is_duplicate(ticker, signal.strategy_type):
+                final_signals.append(signal)
                 current_signals.add(signal_key)
                 
-                # Only alert if new signal
-                if signal_key not in self.previous_signals:
+                if signal.strategy_type == 'TREND':
                     try:
-                        alert = self._format_trend_alert(signal, stocks_data.get(signal.ticker))
-                        all_alerts.append(alert)
-                        
-                        # Track signal for learning system
+                        alert = self._format_trend_alert(signal, stocks_data.get(ticker))
+                        self._track_signal_to_memory(signal, 'TREND')
                         self._track_trend_signal(signal)
                     except Exception:
                         pass
-        
-        # Run VERC if strategy is 'verc' or 'all'
-        if self.strategy in ['verc', 'all']:
-            verc_signals = self._get_verc_signals(stocks_data)
-            
-            # Limit to top N VERC signals
-            max_signals = self.settings.get('scanner', {}).get('max_signals_per_strategy', 2)
-            verc_signals = verc_signals[:max_signals] if verc_signals else []
-            
-            for signal in verc_signals:
-                signal_key = f"VERC:{signal.stock_symbol}"
-                current_signals.add(signal_key)
-                
-                # Only alert if new signal
-                if signal_key not in self.previous_signals:
+                else:
                     try:
-                        alert = self._format_verc_alert(signal, stocks_data.get(signal.stock_symbol))
-                        all_alerts.append(alert)
-                        
-                        # Track signal for learning system
+                        alert = self._format_verc_alert(signal, stocks_data.get(ticker))
+                        self._track_signal_to_memory(signal, 'VERC')
                         self._track_verc_signal(signal)
                     except Exception:
                         pass
         
-        # Update previous signals
+        final_signals = final_signals[:5]
+        
         self.previous_signals = current_signals
         
-        # Send all alerts or no signals message
-        if all_alerts:
-            self._send_unified_alerts(all_alerts)
+        if final_signals:
+            self._send_unified_alerts([s.alert for s in final_signals])
+    
+    def _calculate_rank_score(self, signal) -> float:
+        """
+        Calculate rank score per PRD v2.0 formula:
+        rank_score = strategy_score * 0.6 + volume_score * 0.2 + breakout_strength * 0.2
+        """
+        strategy_score = signal.strategy_score
+        
+        volume_score = min(signal.volume_ratio / 3.0, 1.0) * 10
+        
+        breakout_strength = signal.breakout_strength * 10
+        
+        rank_score = (strategy_score * 0.6) + (volume_score * 0.2) + (breakout_strength * 0.2)
+        
+        return round(rank_score, 2)
+    
+    def _calculate_breakout_strength(self, indicators) -> float:
+        """Calculate % above 20-day high."""
+        close = indicators.get('close', 0)
+        high_20 = indicators.get('high_20')
+        
+        if high_20 and high_20 > 0:
+            return (close - high_20) / high_20
+        return 0.0
     
     def _get_trend_signals(self, stocks_data):
         """Get trend detection signals."""
@@ -370,67 +448,59 @@ class NSETrendScanner:
         return verc_scan_stocks(stocks_data)
     
     def _format_trend_alert(self, signal, df=None):
-        """Format trend signal into detailed alert message."""
+        """Format trend signal into detailed alert message per PRD v2.0."""
         indicators = signal.indicators
         
-        # Get current time in IST
         ist = pytz.timezone('Asia/Kolkata')
         now = datetime.now(ist)
         
-        # Calculate entry, stop loss, and targets
         current_price = indicators.get('close', 0)
         ema20 = indicators.get('ema20', 0)
         ema50 = indicators.get('ema50', 0)
+        atr = indicators.get('atr', 0)
         
-        # Entry: Current price or EMA20 breakout
         entry_min = current_price
         entry_max = ema20 if ema20 > current_price else current_price * 1.005
         
-        # Stop Loss: Below EMA50 or 2% below entry
         stop_loss = min(ema50, current_price * 0.98)
+        if atr > 0:
+            stop_loss = min(stop_loss, current_price - (2 * atr))
         
-        # Targets: 1:2 and 1:3 risk-reward
         risk = entry_min - stop_loss
         target_1 = entry_min + (risk * 2)
         target_2 = entry_min + (risk * 3)
         
-        # Calculate ATR and time estimation
-        atr = self._calculate_atr(df) if df is not None else None
-        time_t1 = self._estimate_time_to_target(current_price, target_1, atr) if atr else "Unknown"
-        time_t2 = self._estimate_time_to_target(current_price, target_2, atr) if atr else "Unknown"
+        atr_calc = self._calculate_atr(df) if df is not None else None
+        time_t1 = self._estimate_time_to_target(current_price, target_1, atr_calc) if atr_calc else "Unknown"
+        time_t2 = self._estimate_time_to_target(current_price, target_2, atr_calc) if atr_calc else "Unknown"
         
-        # Support and Resistance
         support, resistance = self._calculate_support_resistance(df) if df is not None else (None, None)
         
-        # Calculate confidence based on EMA alignment
-        confidence = 7  # Base confidence for trend signals
-        if indicators.get('ema_alignment_score', 0) >= 3:
-            confidence = 9
-        elif indicators.get('ema_alignment_score', 0) >= 2:
-            confidence = 8
+        trend_score = signal.trend_score if hasattr(signal, 'trend_score') else indicators.get('trend_score', 0)
+        volume_ratio = signal.volume_ratio if hasattr(signal, 'volume_ratio') else indicators.get('volume_ratio', 0)
+        rsi_value = indicators.get('rsi_value', 0) or indicators.get('rsi', 0)
+        score_breakdown = signal.score_breakdown if hasattr(signal, 'score_breakdown') else indicators.get('score_breakdown', {})
         
         alert_lines = [
             "📈 TREND SIGNAL",
             "",
             f"Stock: {signal.ticker}",
             f"Time: {now.strftime('%Y-%m-%d %H:%M')} IST",
-            f"Timeframe: 1D",
             "",
             f"💰 Price: ₹{current_price:.2f}",
             "",
             "🎯 Entry Zone:",
             f"  Buy Above: ₹{entry_max:.2f}",
             "",
-            "🛡️ Stop Loss:",
+            "🛡️ Stop Loss (ATR-based):",
             f"  SL: ₹{stop_loss:.2f} ({((stop_loss/current_price)-1)*100:.1f}%)",
             "",
-            "🎯 Targets:",
+            "🎯 Targets (RR ≥ 2:1):",
             f"  Target 1: ₹{target_1:.2f} (+{((target_1/current_price)-1)*100:.1f}%) ETA: {time_t1}",
             f"  Target 2: ₹{target_2:.2f} (+{((target_2/current_price)-1)*100:.1f}%) ETA: {time_t2}",
             ""
         ]
         
-        # Add S/R levels if available
         if support and resistance:
             alert_lines.extend([
                 "📊 S/R Levels:",
@@ -439,21 +509,24 @@ class NSETrendScanner:
                 ""
             ])
         
-        alert_lines.append(f"Confidence: {confidence}/10")
-        
-        # Add reasoning info if available
-        reasoning_info = signal.reasoning if hasattr(signal, 'reasoning') else {}
-        if reasoning_info:
-            alert_lines.extend([
-                "",
-                "🧠 AI Reasoning:",
-                f"  Score: {reasoning_info.get('weighted_score', 'N/A')}",
-                f"  Factors: {', '.join(reasoning_info.get('factor_scores', {}).keys())}"
-            ])
-        
-        # Add tracking info
         alert_lines.extend([
-            "",
+            "📊 Signal Metrics:",
+            f"  Score: {trend_score}/10",
+            f"  Volume Ratio: {volume_ratio:.2f}x",
+            f"  RSI: {rsi_value:.1f}",
+            ""
+        ])
+        
+        if score_breakdown:
+            alert_lines.extend([
+                "📈 Score Breakdown:",
+            ])
+            for factor, score in score_breakdown.items():
+                if score != 0:
+                    alert_lines.append(f"  {factor}: {'+' if score > 0 else ''}{score}")
+            alert_lines.append("")
+        
+        alert_lines.extend([
             f"📊 Signal ID: {signal.ticker}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
             "(This signal is now being tracked for outcome monitoring)"
         ])
@@ -528,9 +601,25 @@ class NSETrendScanner:
     
     def _send_unified_alerts(self, alerts):
         """Send all alerts as a single unified message."""
+        # Check if LLM/AI is enabled and available
+        llm_enabled = self.settings.get('llm', {}).get('enabled', False)
+        ai_available = self.ai_analyzer.is_available() if hasattr(self, 'ai_analyzer') else False
+        
+        # If no signals and LLM is enabled and available, send "No Stocks met confidence threshold"
+        if not alerts:
+            if llm_enabled and ai_available:
+                message = "📊 No Stocks met confidence threshold\n\nAI scanning found no stocks with sufficient confidence (≥60) to send as signals."
+                target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
+                target_method(message)
+                self.total_signals += 1
+            return
+        
         # Send each alert separately for clarity
+        # Use channel if configured
+        target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
+        
         for alert in alerts:
-            self.alert_service.send_alert(alert)
+            target_method(alert)
             self.total_signals += 1
     
     def _send_no_signals_message(self):
@@ -633,10 +722,24 @@ class NSETrendScanner:
             if completed:
                 # Notify for each completed signal
                 for signal in completed:
+                    # Update trade journal
+                    trade_id = signal.get('signal_id', '')
+                    outcome = signal.get('outcome', 'UNKNOWN')
+                    exit_price = signal.get('current_price', 0)
+                    pnl = signal.get('pnl_percent', 0)
+                    
+                    if outcome == 'TARGET_HIT':
+                        self.trade_journal.update_trade(trade_id, 'WIN', exit_price)
+                    elif outcome == 'SL_HIT':
+                        self.trade_journal.update_trade(trade_id, 'LOSS', exit_price)
+                    
                     self.notification_manager.notify_signal_completed(signal)
                 
                 # Also send batch summary
                 self.notification_manager.notify_outcome_batch(completed)
+                
+                # Run auto-optimization after batch completion
+                self.strategy_optimizer.auto_optimize()
                 
                 logger.info(f"Completed signals: {len(completed)}")
             
@@ -680,6 +783,46 @@ class NSETrendScanner:
         except Exception as e:
             logger.error(f"Error tracking signal: {e}")
     
+    def _track_signal_to_memory(self, signal, signal_type: str):
+        """
+        Track signal in Signal Memory for deduplication.
+        
+        Args:
+            signal: Signal object (Trend or VERC)
+            signal_type: Type of signal (TREND, VERC, MTF)
+        """
+        try:
+            # Determine symbol based on signal type
+            if signal_type == 'TREND':
+                stock_symbol = signal.ticker
+            else:
+                stock_symbol = signal.stock_symbol
+            
+            # Get entry, target, SL
+            if signal_type == 'TREND':
+                indicators = signal.indicators if hasattr(signal, 'indicators') else {}
+                entry_price = indicators.get('close', 0)
+            else:
+                entry_price = signal.entry_min if hasattr(signal, 'entry_min') else signal.current_price
+            
+            # Build signal data
+            signal_data = {
+                'stock_symbol': stock_symbol,
+                'signal_type': signal_type,
+                'entry_price': entry_price,
+                'target_price': signal.target_1 if hasattr(signal, 'target_1') else 0,
+                'sl_price': signal.stop_loss if hasattr(signal, 'stop_loss') else 0,
+                'confidence_score': signal.confidence_score if hasattr(signal, 'confidence_score') else 50
+            }
+            
+            # Add to memory
+            self.signal_memory.add_signal(signal_data)
+            
+            logger.info(f"Tracked signal in memory: {stock_symbol} ({signal_type})")
+            
+        except Exception as e:
+            logger.error(f"Error tracking signal to memory: {e}")
+    
     def _track_trend_signal(self, signal):
         """
         Track a Trend signal in the learning system.
@@ -688,23 +831,43 @@ class NSETrendScanner:
             signal: TrendSignal object
         """
         try:
-            # Extract indicators from signal
             indicators = signal.indicators if hasattr(signal, 'indicators') else {}
             
-            # Build signal data for tracking
-            signal_data = {
-                'stock_symbol': signal.ticker,
-                'entry_price': indicators.get('close', 0),
-                'target_price': indicators.get('target_price', 0),
-                'sl_price': indicators.get('stop_loss', 0),
-                'confidence_score': 50,  # Default, will be enhanced with reasoning
-                'signal_type': 'TREND',
-                'reasoning': {
-                    'signal_indicators': indicators
-                }
-            }
+            entry = indicators.get('close', 0)
+            ema50 = indicators.get('ema50', entry * 0.98)
+            atr = indicators.get('atr', 0)
             
-            self._track_signal(signal_data, 'TREND')
+            stop_loss = min(ema50, entry * 0.98)
+            if atr > 0:
+                stop_loss = min(stop_loss, entry - (2 * atr))
+            
+            risk = entry - stop_loss
+            target_1 = entry + (risk * 2)
+            targets = [target_1, entry + (risk * 3)]
+            
+            self.trade_journal.log_signal(
+                symbol=signal.ticker,
+                strategy='TREND',
+                entry=entry,
+                stop_loss=stop_loss,
+                targets=targets,
+                indicators={
+                    'volume_ratio': signal.volume_ratio if hasattr(signal, 'volume_ratio') else indicators.get('volume_ratio', 0),
+                    'rsi': indicators.get('rsi_value', 0) or indicators.get('rsi', 0),
+                    'trend_score': signal.trend_score if hasattr(signal, 'trend_score') else indicators.get('trend_score', 0),
+                    'rank_score': signal.rank_score if hasattr(signal, 'rank_score') else 0
+                }
+            )
+            
+            self._track_signal(signal_data={
+                'stock_symbol': signal.ticker,
+                'entry_price': entry,
+                'target_price': target_1,
+                'sl_price': stop_loss,
+                'confidence_score': 50,
+                'signal_type': 'TREND',
+                'reasoning': {'signal_indicators': indicators}
+            }, signal_type='TREND')
             
         except Exception as e:
             logger.error(f"Error tracking trend signal: {e}")
@@ -717,21 +880,37 @@ class NSETrendScanner:
             signal: VERCSignal object
         """
         try:
-            # Build signal data for tracking
-            signal_data = {
+            entry = signal.entry_min if hasattr(signal, 'entry_min') else signal.current_price
+            stop_loss = signal.stop_loss if hasattr(signal, 'stop_loss') else 0
+            target_1 = signal.target_1 if hasattr(signal, 'target_1') else 0
+            targets = [target_1, signal.target_2] if hasattr(signal, 'target_2') else [target_1]
+            
+            self.trade_journal.log_signal(
+                symbol=signal.stock_symbol,
+                strategy='VERC',
+                entry=entry,
+                stop_loss=stop_loss,
+                targets=targets,
+                indicators={
+                    'volume_ratio': signal.relative_volume if hasattr(signal, 'relative_volume') else 0,
+                    'rsi': 0,
+                    'verc_score': signal.confidence_score if hasattr(signal, 'confidence_score') else 0,
+                    'rank_score': signal.rank_score if hasattr(signal, 'rank_score') else 0
+                }
+            )
+            
+            self._track_signal(signal_data={
                 'stock_symbol': signal.stock_symbol,
-                'entry_price': signal.entry_min,
-                'target_price': signal.target_1,
-                'sl_price': signal.stop_loss,
-                'confidence_score': signal.confidence_score,
+                'entry_price': entry,
+                'target_price': target_1,
+                'sl_price': stop_loss,
+                'confidence_score': signal.confidence_score if hasattr(signal, 'confidence_score') else 50,
                 'signal_type': 'VERC',
                 'reasoning': {
-                    'verc_score': signal.confidence_score,
-                    'volume_ratio': signal.volume_ratio
+                    'verc_score': signal.confidence_score if hasattr(signal, 'confidence_score') else 0,
+                    'volume_ratio': signal.relative_volume if hasattr(signal, 'relative_volume') else 0
                 }
-            }
-            
-            self._track_signal(signal_data, 'VERC')
+            }, signal_type='VERC')
             
         except Exception as e:
             logger.error(f"Error tracking VERC signal: {e}")
@@ -867,6 +1046,12 @@ def parse_arguments():
         '--telegram-chat-id',
         default=os.environ.get('TELEGRAM_CHAT_ID'),
         help='Telegram chat ID (or set TELEGRAM_CHAT_ID env var)'
+    )
+    
+    parser.add_argument(
+        '--telegram-channel-chat-id',
+        default=os.environ.get('TELEGRAM_CHANNEL_ID'),
+        help='Telegram channel chat ID (or set TELEGRAM_CHANNEL_ID env var)'
     )
     
     parser.add_argument(
@@ -1041,6 +1226,7 @@ def main():
         config_path=args.config,
         telegram_token=args.telegram_token,
         telegram_chat_id=args.telegram_chat_id,
+        telegram_channel_chat_id=args.telegram_channel_chat_id,
         use_mock_alerts=args.mock_alerts,
         strategy=args.strategy,
         enable_telegram_bot=args.enable_telegram_bot

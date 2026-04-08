@@ -1,7 +1,11 @@
 {
     "telegram": {
         "bot_token": "",
-        "chat_id": ""
+        "chat_id": "",
+        "channel_chat_id": ""
+    },
+    "llm": {
+        "enabled": true
     },
     "scanner": {
         "timeframe": "1D",
@@ -25,17 +29,11 @@
     "reasoning": {
         "enabled": true,
         "weights": {
-            "ema_alignment": 0.15,
-            "volume_confirmation": 0.15,
-            "rsi_position": 0.10,
-            "atr_volatility": 0.10,
-            "verc_score": 0.20,
-            "rsi_divergence": 0.10,
-            "market_context": 0.10,
-            "price_momentum": 0.10
+            "rule_based": 0,
+            "ai_reasoning": 100
         },
         "ai_reasoning_enabled": true,
-        "min_confidence_threshold": 50
+        "min_confidence_threshold": 60
     },
     "learning": {
         "enabled": true,

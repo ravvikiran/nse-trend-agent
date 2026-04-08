@@ -9,7 +9,10 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 import json
 
-from .alert_service import AlertService
+try:
+    from .alert_service import AlertService
+except ImportError:
+    from alert_service import AlertService
 
 logger = logging.getLogger(__name__)
 
