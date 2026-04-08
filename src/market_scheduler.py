@@ -129,6 +129,16 @@ class MarketScheduler:
         self.scan_callback = callback
         logger.debug("Scan callback set")
     
+    def set_pm_update_callback(self, callback: Callable):
+        """
+        Set the 3PM update callback function.
+        
+        Args:
+            callback: Function to call for 3PM update
+        """
+        self.pm_update_callback = callback
+        logger.debug("PM update callback set")
+    
     def run_scan(self):
         """Execute the scan callback if market is open."""
         if not self.is_market_open():
@@ -144,6 +154,22 @@ class MarketScheduler:
                 logger.error(f"Error during scheduled scan: {str(e)}")
         else:
             logger.debug("No scan callback set")
+    
+    def run_pm_update(self):
+        """Execute the 3PM update callback if market is open."""
+        if not self.is_market_open():
+            logger.debug("Market is closed, skipping 3PM update")
+            return
+        
+        if self.pm_update_callback:
+            try:
+                logger.info("Executing 3PM update...")
+                self.pm_update_callback()
+                logger.info("3PM update completed")
+            except Exception as e:
+                logger.error(f"Error during 3PM update: {str(e)}")
+        else:
+            logger.debug("No PM update callback set")
     
     def schedule_jobs(self):
         """Schedule the scan jobs."""

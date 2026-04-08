@@ -117,6 +117,7 @@ class NSETrendScanner:
         # Initialize scheduler
         self.scheduler = MarketScheduler()
         self.scheduler.scan_callback = self.scan
+        self.scheduler.pm_update_callback = self._run_pm_update_scan
         
         # ==================== NEW: Reasoning + Learning Components ====================
         # History Manager - stores signal data
@@ -826,6 +827,39 @@ class NSETrendScanner:
         
         logger.info(f"Startup scan complete - processed {len(final_signals)} signals")
     
+    def _run_pm_update_scan(self):
+        """Run 3PM update scan - process signals with journal check."""
+        logger.info("Running 3PM update scan...")
+        
+        stocks_data = self.data_fetcher.fetch_multiple_stocks(self.stocks)
+        if not stocks_data:
+            logger.warning("No stock data fetched")
+            return
+        
+        all_signals = []
+        
+        if self.strategy in ['trend', 'all']:
+            trend_signals = self._get_trend_signals(stocks_data)
+            for signal in trend_signals:
+                signal.strategy_type = 'TREND'
+                all_signals.append(signal)
+        
+        if self.strategy in ['verc', 'all']:
+            verc_signals = self._get_verc_signals(stocks_data)
+            for signal in verc_signals:
+                signal.strategy_type = 'VERC'
+                all_signals.append(signal)
+        
+        all_signals.sort(key=lambda x: getattr(x, 'rank_score', 0), reverse=True)
+        
+        final_signals = all_signals[:5]
+        
+        for signal in final_signals:
+            strategy_type = signal.strategy_type if hasattr(signal, 'strategy_type') and signal.strategy_type else 'TREND'
+            self._process_signal(signal, strategy_type, is_startup=False)
+        
+        logger.info(f"3PM update complete - processed {len(final_signals)} signals")
+    
     def _calculate_atr(self, df, period=14):
         """Calculate ATR for time estimation."""
         if df is None or len(df) < period:
@@ -1134,6 +1168,9 @@ class NSETrendScanner:
         if self.telegram_bot:
             self.telegram_bot.start_background()
             logger.info("Telegram bot handler started")
+        
+        # Run startup scan immediately
+        self._run_startup_scan()
         
         # Start scheduler
         self.scheduler.start()
