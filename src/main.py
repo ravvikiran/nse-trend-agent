@@ -127,6 +127,9 @@ class NSETrendScanner:
             strategy=self.strategy,
             stocks=self.stocks
         )
+        
+        # Trade Journal & Performance (must be initialized before scheduler uses it)
+        self.trade_journal = create_trade_journal()
         self.scheduler.set_trade_journal(self.trade_journal)
         self.scheduler.set_alert_service(self.alert_service)
         
@@ -161,8 +164,6 @@ class NSETrendScanner:
         self.mtf_scanner.set_data_fetcher(self.data_fetcher)
         
         # ==================== Trade Journal & Performance ====================
-        self.trade_journal = create_trade_journal()
-        
         self.strategy_optimizer = create_strategy_performance_tracker(self.trade_journal)
         
         self.ai_learning_layer = create_ai_learning_layer(
