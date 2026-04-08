@@ -38,12 +38,17 @@ class MarketScheduler:
     PM_UPDATE_HOUR = 15
     PM_UPDATE_MINUTE = 0
     
+    # 10AM update time in IST (signal alert time)
+    AM_UPDATE_HOUR = 10
+    AM_UPDATE_MINUTE = 0
+    
     def __init__(self):
         """Initialize the MarketScheduler."""
         self.running = False
         self.scheduler_thread = None
         self.scan_callback = None
         self.pm_update_callback = None
+        self.am_update_callback = None
         self.ist = pytz.timezone('Asia/Kolkata')
         self.data_fetcher = None
         self.get_trend_signals_fn = None
@@ -175,6 +180,16 @@ class MarketScheduler:
         self.pm_update_callback = callback
         logger.debug("PM update callback set")
     
+    def set_am_update_callback(self, callback: Callable):
+        """
+        Set the 10AM signal alert callback function.
+        
+        Args:
+            callback: Function to call for 10AM update
+        """
+        self.am_update_callback = callback
+        logger.debug("AM update callback set")
+    
     def run_scan(self):
         """Execute the scan callback if market is open."""
         if not self.is_market_open():
@@ -210,6 +225,26 @@ class MarketScheduler:
                 logger.warning("No scanner components or callback set for PM update")
         except Exception as e:
             logger.error(f"Error during 3PM update: {str(e)}")
+    
+    def run_am_update(self):
+        """Execute 10AM signal alert: scan and send signals to Telegram."""
+        try:
+            if not self.is_market_open():
+                logger.debug("Market is closed, skipping 10AM update")
+                return
+            
+            if self._has_scanner_components():
+                logger.info("Executing 10AM signal alert with scanner components...")
+                self._execute_scanner_logic(is_startup=False)
+                logger.info("10AM signal alert completed successfully")
+            elif self.am_update_callback:
+                logger.info("Executing 10AM update via callback...")
+                self.am_update_callback()
+                logger.info("10AM update completed via callback")
+            else:
+                logger.warning("No scanner components or callback set for AM update")
+        except Exception as e:
+            logger.error(f"Error during 10AM update: {str(e)}")
 
     def _has_scanner_components(self) -> bool:
         """Check if all required scanner components are set."""
@@ -258,11 +293,14 @@ class MarketScheduler:
         # Schedule scans every 15 minutes during market hours
         schedule.every(self.SCAN_INTERVAL).minutes.do(self.run_scan)
         
+        # Schedule 10AM signal alert (10:00 IST)
+        schedule.every().day.at("10:00").do(self.run_am_update)
+        
         # Schedule 3PM update (15:00 IST)
         schedule.every().day.at("15:00").do(self.run_pm_update)
         
         logger.debug(f"Scheduled scans every {self.SCAN_INTERVAL} minutes during market hours")
-        logger.debug("Scheduled 3PM update job")
+        logger.debug("Scheduled 10AM and 3PM signal alert jobs")
     
     def start(self):
         """Start the scheduler in a background thread."""

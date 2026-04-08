@@ -40,7 +40,14 @@ class StrategyPerformanceTracker:
     FILTER_CAPS = {
         'volume_ratio_min': 2.5,
         'rsi_max': 70,
-        'atr_min': 0.1
+        'atr_min': 0.1,
+        'breakout_strength_min': 0.05
+    }
+    
+    FILTER_FLOORS = {
+        'volume_ratio_min': 1.5,
+        'rsi_max': 50,
+        'breakout_strength_min': 0.0
     }
     
     def __init__(self, trade_journal, data_dir: str = DATA_DIR):
@@ -75,7 +82,8 @@ class StrategyPerformanceTracker:
         self.adaptive_filters = {
             'volume_ratio_min': 1.5,
             'rsi_max': 65,
-            'atr_min': 0.5
+            'atr_min': 0.5,
+            'breakout_strength_min': 0.0
         }
         
         self._current_market_condition = 'TRENDING'
@@ -331,8 +339,7 @@ class StrategyPerformanceTracker:
     def get_rank_score_formula(self) -> str:
         """Get current rank score formula."""
         return (
-            f"rank_score = (strategy_score * strategy_weight * 0.6) + "
-            f"(volume_score * 0.2) + (breakout_strength * 0.2)"
+            f"rank_score = (strategy_score * 0.6 + volume_score * 0.2 + breakout_score * 0.2)"
         )
     
     def calculate_adaptive_rank_score(
@@ -343,19 +350,19 @@ class StrategyPerformanceTracker:
         breakout_strength: float
     ) -> float:
         """
-        Calculate rank score with adaptive weights.
+        Calculate PURE rank score (no mixing with weights).
         
-        rank_score = strategy_score * strategy_weight * 0.6 + volume_score * 0.2 + breakout_strength * 0.2
+        base_rank_score = (strategy_score * 0.6) + (volume_score * 0.2) + (breakout_score * 0.2)
+        
+        Strategy weights should be used for SORTING, not scoring.
         """
-        strategy_weight = self.strategy_weights.get(strategy_type, 0.5)
-        
         volume_score = min(volume_ratio / 3.0, 1.0) * 10
         
         breakout_score = breakout_strength * 10
         
-        rank_score = (strategy_score * strategy_weight * 0.6) + (volume_score * 0.2) + (breakout_score * 0.2)
+        base_rank_score = (strategy_score * 0.6) + (volume_score * 0.2) + (breakout_score * 0.2)
         
-        return round(rank_score, 2)
+        return round(base_rank_score, 2)
     
     def adapt_filters(self, analysis: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -364,9 +371,10 @@ class StrategyPerformanceTracker:
         Examples:
         - Too many false breakouts → increase volume_ratio from 1.5 → 1.8 (capped at 2.5)
         - Late entries → tighten RSI (65 → 60)
+        - Weak breakouts → increase breakout_strength_min
         
         Args:
-            analysis: Analysis from AI Learning Layer
+            analysis: Analysis from AI Learning Layer or Factor Analyzer
             
         Returns:
             Updated filter values
@@ -376,28 +384,90 @@ class StrategyPerformanceTracker:
         for issue in issues:
             if 'false_breakouts' in issue or 'low_volume' in issue:
                 current = self.adaptive_filters['volume_ratio_min']
-                self.adaptive_filters['volume_ratio_min'] = min(
+                new_value = min(
                     self.FILTER_CAPS['volume_ratio_min'],
-                    current + 0.1
+                    current + 0.2
                 )
+                if new_value != current:
+                    logger.info(f"Adaptive filter: volume_ratio_min {current} → {new_value}")
+                    self.adaptive_filters['volume_ratio_min'] = new_value
             
             if 'late_entries' in issue or 'overbought' in issue:
                 current = self.adaptive_filters['rsi_max']
-                self.adaptive_filters['rsi_max'] = max(
+                new_value = max(
                     self.FILTER_CAPS['rsi_max'],
                     current - 5
                 )
+                if new_value != current:
+                    logger.info(f"Adaptive filter: rsi_max {current} → {new_value}")
+                    self.adaptive_filters['rsi_max'] = new_value
+            
+            if 'weak_breakouts' in issue:
+                current = self.adaptive_filters['breakout_strength_min']
+                new_value = min(
+                    self.FILTER_CAPS['breakout_strength_min'],
+                    current + 0.01
+                )
+                if new_value != current:
+                    logger.info(f"Adaptive filter: breakout_strength_min {current} → {new_value}")
+                    self.adaptive_filters['breakout_strength_min'] = new_value
             
             if 'dead_stock' in issue or 'low_volatility' in issue:
                 current = self.adaptive_filters['atr_min']
-                self.adaptive_filters['atr_min'] = max(
+                new_value = max(
                     self.FILTER_CAPS['atr_min'],
                     current - 0.1
                 )
+                if new_value != current:
+                    logger.info(f"Adaptive filter: atr_min {current} → {new_value}")
+                    self.adaptive_filters['atr_min'] = new_value
         
         if issues:
             self._save_filters()
             logger.info(f"Adapted filters: {self.adaptive_filters}")
+        
+        return self.adaptive_filters.copy()
+    
+    def adapt_filters_from_factor_analysis(self, factor_recommendations: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Adapt filters based on factor-level analysis.
+        
+        IF volume_ratio 1.5-1.8 underperforms → increase volume_ratio_min
+        IF RSI > 60 underperforms → reduce rsi_max
+        
+        Args:
+            factor_recommendations: Recommendations from FactorAnalyzer
+            
+        Returns:
+            Updated filter values
+        """
+        changes_made = []
+        
+        if 'volume_ratio_warning' in factor_recommendations:
+            current = self.adaptive_filters['volume_ratio_min']
+            new_value = min(
+                self.FILTER_CAPS['volume_ratio_min'],
+                current + 0.2
+            )
+            if new_value != current:
+                self.adaptive_filters['volume_ratio_min'] = new_value
+                changes_made.append(f"volume_ratio_min: {current} → {new_value}")
+        
+        if 'rsi_optimal' in factor_recommendations:
+            rsi_info = factor_recommendations['rsi_optimal']
+            if '60-65' in rsi_info or '65-70' in rsi_info:
+                current = self.adaptive_filters['rsi_max']
+                new_value = max(
+                    self.FILTER_CAPS['rsi_max'],
+                    current - 5
+                )
+                if new_value != current:
+                    self.adaptive_filters['rsi_max'] = new_value
+                    changes_made.append(f"rsi_max: {current} → {new_value}")
+        
+        if changes_made:
+            self._save_filters()
+            logger.info(f"Factor-based filter adaptations: {changes_made}")
         
         return self.adaptive_filters.copy()
     
@@ -411,20 +481,20 @@ class StrategyPerformanceTracker:
         No-Trade Filter - avoid signals when:
         - ATR very low (dead stock)
         - Choppy candles (wicks > body)
-        - NIFTY unclear direction
+        - NIFTY unclear direction (SIDEWAYS)
         
         Args:
             atr: Average True Range
             wick_to_body_ratio: Ratio of wick size to body size
-            nifty_direction: 'UP', 'DOWN', or 'SIDEWAYS'
+            nifty_direction: 'BULLISH', 'BEARISH', or 'SIDEWAYS'
             
         Returns:
             Dict with 'allowed' bool and 'reasons' list
         """
         reasons = []
         
-        if atr and atr < self.adaptive_filters['atr_min']:
-            reasons.append(f"ATR too low ({atr:.2f} < {self.adaptive_filters['atr_min']})")
+        if atr and atr < self.adaptive_filters.get('atr_min', 0.5):
+            reasons.append(f"ATR too low ({atr:.2f} < {self.adaptive_filters.get('atr_min', 0.5)})")
         
         if wick_to_body_ratio > 1.0:
             reasons.append(f"Choppy candle (wick/body: {wick_to_body_ratio:.2f} > 1.0)")
@@ -434,6 +504,33 @@ class StrategyPerformanceTracker:
         
         return {
             'allowed': len(reasons) == 0,
+            'reasons': reasons
+        }
+    
+    def check_signal_quality(
+        self,
+        score: float,
+        volume_ratio: float,
+        breakout_strength: float
+    ) -> Dict[str, Any]:
+        """
+        Check signal against adaptive thresholds.
+        
+        Returns:
+            Dict with 'passed' bool and 'reasons' list
+        """
+        reasons = []
+        
+        if volume_ratio < self.adaptive_filters.get('volume_ratio_min', 1.5):
+            reasons.append(f"Volume ratio below threshold ({volume_ratio:.2f} < {self.adaptive_filters.get('volume_ratio_min', 1.5)})")
+        
+        breakout_pct = breakout_strength * 100 if breakout_strength <= 1 else breakout_strength
+        breakout_min = self.adaptive_filters.get('breakout_strength_min', 0.0) * 100
+        if breakout_pct < breakout_min:
+            reasons.append(f"Breakout strength below threshold ({breakout_pct:.1f}% < {breakout_min:.1f}%)")
+        
+        return {
+            'passed': len(reasons) == 0,
             'reasons': reasons
         }
     

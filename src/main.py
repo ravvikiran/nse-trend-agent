@@ -47,6 +47,10 @@ from trade_journal import create_trade_journal
 from strategy_optimizer import create_strategy_performance_tracker
 from ai_learning_layer import create_ai_learning_layer
 
+# New: Factor Analyzer & Market Context
+from factor_analyzer import create_factor_analyzer
+from market_context import create_market_context_engine
+
 
 def setup_logging(log_level='INFO', log_file='logs/scanner.log'):
     """Setup logging configuration."""
@@ -118,6 +122,7 @@ class NSETrendScanner:
         self.scheduler = MarketScheduler()
         self.scheduler.scan_callback = self.scan
         self.scheduler.pm_update_callback = self._run_pm_update_scan
+        self.scheduler.am_update_callback = self._run_pm_update_scan  # 10AM uses same logic as 3PM
         
         self.scheduler.set_scanner_components(
             data_fetcher=self.data_fetcher,
@@ -171,6 +176,12 @@ class NSETrendScanner:
             self.strategy_optimizer,
             self.ai_analyzer
         )
+        
+        # ==================== NEW: Factor Analyzer ====================
+        self.factor_analyzer = create_factor_analyzer(self.trade_journal)
+        
+        # ==================== NEW: Market Context Engine ====================
+        self.market_context_engine = create_market_context_engine(self.data_fetcher)
         
         # Signal tracking interval (check every N scans)
         self.signal_check_interval = self.settings.get('learning', {}).get('signal_tracking', {}).get('check_interval_scans', 4)
@@ -263,6 +274,10 @@ class NSETrendScanner:
         scan_start = datetime.now()
         
         try:
+            # Step 0: Detect market context
+            market_context = self.market_context_engine.detect_context()
+            logger.debug(f"Market context: {market_context}")
+            
             # Step 1a: Fetch data for all stocks (single timeframe for existing strategies)
             stocks_data = self.data_fetcher.fetch_multiple_stocks(self.stocks)
             
@@ -357,11 +372,22 @@ class NSETrendScanner:
         """
         Run strategy based on configuration (Trend, VERC, or both).
         Implements unified ranking system from PRD v2.0:
-        - rank_score = strategy_score * 0.6 + volume_score * 0.2 + breakout_strength * 0.2
+        - base_rank_score = (strategy_score * 0.6) + (volume_score * 0.2) + (breakout_strength * 0.2)
+        - Score is PURE - no mixing with strategy_weight
+        - Sorting done separately by (strategy_weight, rank_score)
         - TREND signals take priority over VERC signals
         - Max 5 signals per scan
+        
+        With market context awareness (strategy-aware):
+        - IF TREND and NIFTY SIDEWAYS: reject weak signals
+        - IF TREND and NIFTY BEARISH: reduce score by -1 (not -2)
+        - VERC allowed in all market conditions
         """
+        from trade_journal import TradeJournal
+        
         excluded_stocks = self.signal_memory.get_excluded_stocks()
+        
+        market_context = self.market_context_engine.get_context()
         
         all_signals = []
         current_signals = set()
@@ -374,7 +400,31 @@ class NSETrendScanner:
                     signal.strategy_score = signal.trend_score if hasattr(signal, 'trend_score') else 0
                     signal.volume_ratio = signal.indicators.get('volume_ratio', 0)
                     signal.breakout_strength = self._calculate_breakout_strength(signal.indicators)
-                    signal.rank_score = self._calculate_rank_score(signal)
+                    signal.base_rank_score = self._calculate_base_rank_score(signal)
+                    
+                    if market_context == 'SIDEWAYS' and signal.base_rank_score < 6:
+                        logger.info(f"Signal {signal.ticker} rejected: weak signal in sideways market")
+                        continue
+                    
+                    if market_context == 'BEARISH':
+                        signal.rank_score = signal.base_rank_score - 1
+                    else:
+                        signal.rank_score = signal.base_rank_score
+                    
+                    signal.market_context = market_context
+                    
+                    signal.quality = TradeJournal.calculate_quality(
+                        signal.strategy_score,
+                        signal.volume_ratio,
+                        signal.breakout_strength
+                    )
+                    
+                    if self._check_no_trade_zone(signal, stocks_data.get(signal.ticker), market_context):
+                        logger.info(f"Signal {signal.ticker} rejected by no-trade zone: {signal.get('rejection_reason', 'N/A')}")
+                        continue
+                    
+                    logger.info(f"Signal accepted: {signal.ticker} | strategy: {signal.strategy_type} | score: {signal.rank_score:.2f} | quality: {signal.quality} | market_context: {signal.market_context}")
+                    
                     all_signals.append(signal)
         
         if self.strategy in ['verc', 'all']:
@@ -385,10 +435,26 @@ class NSETrendScanner:
                     signal.strategy_score = signal.confidence_score if hasattr(signal, 'confidence_score') else 0
                     signal.volume_ratio = signal.relative_volume if hasattr(signal, 'relative_volume') else 0
                     signal.breakout_strength = 0
-                    signal.rank_score = self._calculate_rank_score(signal)
+                    signal.base_rank_score = self._calculate_base_rank_score(signal)
+                    
+                    signal.rank_score = signal.base_rank_score
+                    signal.market_context = market_context
+                    
+                    signal.quality = TradeJournal.calculate_quality(
+                        signal.strategy_score,
+                        signal.volume_ratio,
+                        0
+                    )
+                    
+                    if self._check_no_trade_zone(signal, stocks_data.get(signal.stock_symbol), market_context):
+                        logger.info(f"Signal {signal.stock_symbol} rejected by no-trade zone: {signal.get('rejection_reason', 'N/A')}")
+                        continue
+                    
+                    logger.info(f"Signal accepted: {signal.stock_symbol} | strategy: {signal.strategy_type} | score: {signal.rank_score:.2f} | quality: {signal.quality} | market_context: {signal.market_context}")
+                    
                     all_signals.append(signal)
         
-        all_signals.sort(key=lambda x: x.rank_score, reverse=True)
+        all_signals.sort(key=lambda x: (self.strategy_optimizer.strategy_weights.get(x.strategy_type, 0.5), x.rank_score), reverse=True)
         
         final_signals = []
         seen_tickers = set()
@@ -430,11 +496,78 @@ class NSETrendScanner:
         if final_signals:
             self._send_unified_alerts([s.alert for s in final_signals])
     
+    def _calculate_base_rank_score(self, signal) -> float:
+        """Calculate base rank score without strategy weight."""
+        strategy_score = signal.strategy_score
+        
+        volume_score = min(signal.volume_ratio / 3.0, 1.0) * 10
+        
+        breakout_strength = signal.breakout_strength * 10
+        
+        base_rank_score = (strategy_score * 0.6) + (volume_score * 0.2) + (breakout_strength * 0.2)
+        
+        return round(base_rank_score, 2)
+    
+    def _check_no_trade_zone(self, signal, df, market_context) -> bool:
+        """Check if signal should be rejected by no-trade zone filter."""
+        if df is None:
+            return False
+        
+        strategy_type = getattr(signal, 'strategy_type', 'TREND')
+        
+        if strategy_type == 'VERC':
+            return False
+        
+        if strategy_type == 'TREND' and market_context == 'SIDEWAYS':
+            return False
+        
+        try:
+            atr = df['close'].diff().abs().rolling(14).mean().iloc[-1] if len(df) >= 14 else 0
+            current_price = df['close'].iloc[-1]
+            high = df['high'].iloc[-1]
+            low = df['low'].iloc[-1]
+            open_price = df['open'].iloc[-1]
+            
+            body = abs(current_price - open_price)
+            upper_wick = high - max(current_price, open_price)
+            lower_wick = min(current_price, open_price) - low
+            wick_to_body = (upper_wick + lower_wick) / body if body > 0 else 0
+            
+            no_trade = self.strategy_optimizer.check_no_trade_conditions(
+                atr=atr,
+                wick_to_body_ratio=wick_to_body,
+                nifty_direction=market_context
+            )
+            
+            if not no_trade['allowed']:
+                signal.rejection_reason = no_trade['reasons']
+                return True
+            
+            quality_check = self.strategy_optimizer.check_signal_quality(
+                score=signal.strategy_score,
+                volume_ratio=signal.volume_ratio,
+                breakout_strength=signal.breakout_strength
+            )
+            
+            if not quality_check['passed']:
+                signal.rejection_reason = quality_check['reasons']
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.debug(f"Error in no-trade zone check: {e}")
+            return False
+    
     def _calculate_rank_score(self, signal) -> float:
         """
         Calculate rank score per PRD v2.0 formula:
-        rank_score = strategy_score * 0.6 + volume_score * 0.2 + breakout_strength * 0.2
-        Then multiply by dynamic weight from performance_tracker
+        base_rank_score = (strategy_score * 0.6) + (volume_score * 0.2) + (breakout_strength * 0.2)
+        
+        Then add strategy_weight for ranking priority:
+        final_rank_score = base_rank_score + (strategy_weight * 0.5)
+        
+        DO NOT multiply base score by weight - this contaminates the scoring.
         """
         strategy_score = signal.strategy_score
         
@@ -442,14 +575,16 @@ class NSETrendScanner:
         
         breakout_strength = signal.breakout_strength * 10
         
-        rank_score = (strategy_score * 0.6) + (volume_score * 0.2) + (breakout_strength * 0.2)
+        base_rank_score = (strategy_score * 0.6) + (volume_score * 0.2) + (breakout_strength * 0.2)
         
         strategy_type = getattr(signal, 'strategy_type', 'TREND')
-        dynamic_weight = self.strategy_optimizer.strategy_weights.get(strategy_type, 0.5)
+        strategy_weight = self.strategy_optimizer.strategy_weights.get(strategy_type, 0.5)
         
-        rank_score = rank_score * dynamic_weight
+        signal.base_rank_score = round(base_rank_score, 2)
         
-        return round(rank_score, 2)
+        final_rank_score = base_rank_score + (strategy_weight * 0.5)
+        
+        return round(final_rank_score, 2)
     
     def _calculate_breakout_strength(self, indicators) -> float:
         """Calculate % above 20-day high."""
@@ -792,7 +927,11 @@ class NSETrendScanner:
                     entry,
                     stop_loss,
                     targets,
-                    indicators_dict
+                    indicators_dict,
+                    quality=getattr(signal, 'quality', 'B'),
+                    market_context=getattr(signal, 'market_context', 'BULLISH'),
+                    entry_type='BREAKOUT',
+                    breakout_strength=getattr(signal, 'breakout_strength', 0)
                 )
                 
                 signal_msg = self._format_signal_for_telegram(signal, strategy_type, current_price)
@@ -960,22 +1099,29 @@ class NSETrendScanner:
         """
         Check all active signals for target/SL hits.
         Sends notifications for completed signals.
+        Also runs factor analysis and learning feedback loop.
+        
+        Learning only runs when:
+        - total closed trades >= 20 (enough data)
+        - cooldown period passed (once per day)
         """
         try:
-            # Check all active signals
+            last_learning = getattr(self, '_last_learning_time', None)
+            if last_learning:
+                from datetime import timedelta
+                if datetime.now() - last_learning < timedelta(days=1):
+                    logger.debug("Learning cooldown active, skipping")
+            
             result = self.signal_tracker.check_all_active_signals()
             
             completed = result.get('completed', [])
             still_active = result.get('still_active', [])
             
             if completed:
-                # Notify for each completed signal
                 for signal in completed:
-                    # Update trade journal
                     trade_id = signal.get('signal_id', '')
                     outcome = signal.get('outcome', 'UNKNOWN')
                     exit_price = signal.get('current_price', 0)
-                    pnl = signal.get('pnl_percent', 0)
                     
                     if outcome == 'TARGET_HIT':
                         self.trade_journal.update_trade(trade_id, 'WIN', exit_price)
@@ -984,15 +1130,27 @@ class NSETrendScanner:
                     
                     self.notification_manager.notify_signal_completed(signal)
                 
-                # Also send batch summary
                 self.notification_manager.notify_outcome_batch(completed)
                 
-                # Run auto-optimization after batch completion
-                self.strategy_optimizer.auto_optimize()
+                closed_trades = self.trade_journal.get_closed_trades(limit=100)
+                total_closed = len(closed_trades)
+                
+                if total_closed >= 20:
+                    self.factor_analyzer.batch_analyze(closed_trades)
+                    
+                    recommendations = self.factor_analyzer.get_optimization_recommendations()
+                    if recommendations:
+                        self.strategy_optimizer.adapt_filters_from_factor_analysis(recommendations)
+                    
+                    self.strategy_optimizer.auto_optimize()
+                    
+                    self._last_learning_time = datetime.now()
+                    logger.info(f"Learning run: {total_closed} closed trades analyzed")
+                else:
+                    logger.debug(f"Skipping learning: only {total_closed} closed trades (need 20+)")
                 
                 logger.info(f"Completed signals: {len(completed)}")
             
-            # Log active signal status
             if still_active:
                 logger.debug(f"Active signals: {len(still_active)}")
                 
@@ -1094,6 +1252,10 @@ class NSETrendScanner:
             target_1 = entry + (risk * 2)
             targets = [target_1, entry + (risk * 3)]
             
+            quality = getattr(signal, 'quality', 'B')
+            market_context = getattr(signal, 'market_context', 'BULLISH')
+            breakout_strength = getattr(signal, 'breakout_strength', 0)
+            
             self.trade_journal.log_signal(
                 symbol=signal.ticker,
                 strategy='TREND',
@@ -1104,9 +1266,26 @@ class NSETrendScanner:
                     'volume_ratio': signal.volume_ratio if hasattr(signal, 'volume_ratio') else indicators.get('volume_ratio', 0),
                     'rsi': indicators.get('rsi_value', 0) or indicators.get('rsi', 0),
                     'trend_score': signal.trend_score if hasattr(signal, 'trend_score') else indicators.get('trend_score', 0),
-                    'rank_score': signal.rank_score if hasattr(signal, 'rank_score') else 0
-                }
+                    'rank_score': signal.rank_score if hasattr(signal, 'rank_score') else 0,
+                    'candle_quality': 'NORMAL'
+                },
+                quality=quality,
+                market_context=market_context,
+                entry_type='BREAKOUT',
+                breakout_strength=breakout_strength
             )
+            
+            self.factor_analyzer.analyze_trade({
+                'symbol': signal.ticker,
+                'strategy': 'TREND',
+                'outcome': 'OPEN',
+                'volume_ratio': signal.volume_ratio if hasattr(signal, 'volume_ratio') else indicators.get('volume_ratio', 0),
+                'rsi': indicators.get('rsi_value', 0) or indicators.get('rsi', 0),
+                'breakout_strength': breakout_strength,
+                'quality': quality,
+                'market_context': market_context,
+                'entry_type': 'BREAKOUT'
+            })
             
             self._track_signal(signal_data={
                 'stock_symbol': signal.ticker,
@@ -1134,6 +1313,9 @@ class NSETrendScanner:
             target_1 = signal.target_1 if hasattr(signal, 'target_1') else 0
             targets = [target_1, signal.target_2] if hasattr(signal, 'target_2') else [target_1]
             
+            quality = getattr(signal, 'quality', 'B')
+            market_context = getattr(signal, 'market_context', 'BULLISH')
+            
             self.trade_journal.log_signal(
                 symbol=signal.stock_symbol,
                 strategy='VERC',
@@ -1144,9 +1326,26 @@ class NSETrendScanner:
                     'volume_ratio': signal.relative_volume if hasattr(signal, 'relative_volume') else 0,
                     'rsi': 0,
                     'verc_score': signal.confidence_score if hasattr(signal, 'confidence_score') else 0,
-                    'rank_score': signal.rank_score if hasattr(signal, 'rank_score') else 0
-                }
+                    'rank_score': signal.rank_score if hasattr(signal, 'rank_score') else 0,
+                    'candle_quality': 'NORMAL'
+                },
+                quality=quality,
+                market_context=market_context,
+                entry_type='BREAKOUT',
+                breakout_strength=0
             )
+            
+            self.factor_analyzer.analyze_trade({
+                'symbol': signal.stock_symbol,
+                'strategy': 'VERC',
+                'outcome': 'OPEN',
+                'volume_ratio': signal.relative_volume if hasattr(signal, 'relative_volume') else 0,
+                'rsi': 0,
+                'breakout_strength': 0,
+                'quality': quality,
+                'market_context': market_context,
+                'entry_type': 'BREAKOUT'
+            })
             
             self._track_signal(signal_data={
                 'stock_symbol': signal.stock_symbol,

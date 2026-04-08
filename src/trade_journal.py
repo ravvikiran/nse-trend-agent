@@ -33,6 +33,11 @@ class Trade:
     trend_score: float = 0.0
     verc_score: float = 0.0
     rank_score: float = 0.0
+    quality: str = "B"  # A / B / C
+    market_context: str = "BULLISH"  # BULLISH / SIDEWAYS / BEARISH
+    entry_type: str = "BREAKOUT"  # BREAKOUT / PULLBACK
+    candle_quality: str = "NORMAL"  # NORMAL / STRONG / WEAK
+    breakout_strength: float = 0.0  # percentage
 
 
 class TradeJournal:
@@ -88,7 +93,11 @@ class TradeJournal:
         entry: float,
         stop_loss: float,
         targets: List[float],
-        indicators: Dict[str, Any] = None
+        indicators: Dict[str, Any] = None,
+        quality: str = "B",
+        market_context: str = "BULLISH",
+        entry_type: str = "BREAKOUT",
+        breakout_strength: float = 0.0
     ) -> str:
         """
         Log EVERY alert/signal.
@@ -100,6 +109,10 @@ class TradeJournal:
             stop_loss: Stop loss price
             targets: List of target prices
             indicators: Additional indicators (volume_ratio, rsi, scores)
+            quality: A/B/C quality grade
+            market_context: BULLISH/SIDEWAYS/BEARISH
+            entry_type: BREAKOUT/PULLBACK
+            breakout_strength: percentage breakout strength
             
         Returns:
             trade_id
@@ -122,6 +135,11 @@ class TradeJournal:
             'trend_score': indicators.get('trend_score', 0) if indicators else 0,
             'verc_score': indicators.get('verc_score', 0) if indicators else 0,
             'rank_score': indicators.get('rank_score', 0) if indicators else 0,
+            'quality': quality,
+            'market_context': market_context,
+            'entry_type': entry_type,
+            'candle_quality': indicators.get('candle_quality', 'NORMAL') if indicators else 'NORMAL',
+            'breakout_strength': breakout_strength,
             'updated_at': datetime.now().isoformat()
         }
         
@@ -131,6 +149,32 @@ class TradeJournal:
         logger.info(f"Logged signal: {symbol} ({strategy}) - {trade_id}")
         
         return trade_id
+    
+    @staticmethod
+    def calculate_quality(score: float, volume_ratio: float, breakout_strength: float) -> str:
+        """
+        Calculate trade quality grade.
+        
+        A: score >= 8, volume_ratio >= 1.8, breakout_strength >= 3%
+        B: score 6-7
+        C: score < 6
+        
+        Args:
+            score: Signal score (0-10)
+            volume_ratio: Volume ratio
+            breakout_strength: Breakout strength percentage
+            
+        Returns:
+            Quality grade: A, B, or C
+        """
+        breakout_pct = breakout_strength * 100 if breakout_strength <= 1 else breakout_strength
+        
+        if score >= 8 and volume_ratio >= 1.8 and breakout_pct >= 3:
+            return 'A'
+        elif score >= 6:
+            return 'B'
+        else:
+            return 'C'
     
     def update_trade(
         self,
