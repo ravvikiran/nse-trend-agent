@@ -409,6 +409,7 @@ class NSETrendScanner:
                 if signal.strategy_type == 'TREND':
                     try:
                         alert = self._format_trend_alert(signal, stocks_data.get(ticker))
+                        signal.alert = alert
                         self._track_signal_to_memory(signal, 'TREND')
                         self._track_trend_signal(signal)
                     except Exception:
@@ -416,6 +417,7 @@ class NSETrendScanner:
                 else:
                     try:
                         alert = self._format_verc_alert(signal, stocks_data.get(ticker))
+                        signal.alert = alert
                         self._track_signal_to_memory(signal, 'VERC')
                         self._track_verc_signal(signal)
                     except Exception:
@@ -676,14 +678,11 @@ class NSETrendScanner:
             current_price = entry
             
             return (
-                f"SYMBOL: {ticker}\n"
-                f"STRATEGY: {strategy_type}\n"
-                f"ENTRY: {entry:.0f}\n"
-                f"STOP: {stop_loss:.0f}\n"
-                f"TARGETS: {target_1:.0f} / {target_2:.0f} / {target_3:.0f}\n"
-                f"RSI: {rsi:.1f}\n"
-                f"VOLUME: {volume_ratio:.2f}x\n"
-                f"SCORE: {score:.1f}"
+                f"📈 {ticker}\n"
+                f"🎯 Entry: {entry:.0f}\n"
+                f"🛡️ SL: {stop_loss:.0f}\n"
+                f"🚀 Targets: {target_1:.0f} / {target_2:.0f} / {target_3:.0f}\n"
+                f"⭐ Score: {score:.1f}"
             )
         else:
             ticker = signal.stock_symbol
@@ -692,19 +691,14 @@ class NSETrendScanner:
             t1 = signal.target_1 if hasattr(signal, 'target_1') else 0
             t2 = signal.target_2 if hasattr(signal, 'target_2') else 0
             t3 = signal.target_3 if hasattr(signal, 'target_3') else 0
-            rsi = signal.rsi if hasattr(signal, 'rsi') else 0
-            volume_ratio = signal.relative_volume if hasattr(signal, 'relative_volume') else 0
             score = signal.rank_score if hasattr(signal, 'rank_score') else signal.confidence_score if hasattr(signal, 'confidence_score') else 0
             
             return (
-                f"SYMBOL: {ticker}\n"
-                f"STRATEGY: {strategy_type}\n"
-                f"ENTRY: {entry:.0f}\n"
-                f"STOP: {stop_loss:.0f}\n"
-                f"TARGETS: {t1:.0f} / {t2:.0f} / {t3:.0f}\n"
-                f"RSI: {rsi:.1f}\n"
-                f"VOLUME: {volume_ratio:.2f}x\n"
-                f"SCORE: {score:.1f}"
+                f"📈 {ticker}\n"
+                f"🎯 Entry: {entry:.0f}\n"
+                f"🛡️ SL: {stop_loss:.0f}\n"
+                f"🚀 Targets: {t1:.0f} / {t2:.0f} / {t3:.0f}\n"
+                f"⭐ Score: {score:.1f}"
             )
     
     def _format_update_for_telegram(self, trade: Dict, current_price: float, status: str) -> str:
@@ -786,13 +780,19 @@ class NSETrendScanner:
                     volume_ratio = signal.relative_volume if hasattr(signal, 'relative_volume') else 0
                     current_price = signal.current_price if hasattr(signal, 'current_price') else entry
                 
+                indicators_dict = {
+                    'volume_ratio': volume_ratio,
+                    'rsi': rsi,
+                    'trend_score': signal.trend_score if hasattr(signal, 'trend_score') else 0,
+                    'rank_score': signal.rank_score if hasattr(signal, 'rank_score') else 0
+                }
                 trade_id = self.trade_journal.log_signal(
                     ticker,
                     strategy_type,
                     entry,
                     stop_loss,
                     targets,
-                    {'volume_ratio': volume_ratio, 'rsi': rsi}
+                    indicators_dict
                 )
                 
                 signal_msg = self._format_signal_for_telegram(signal, strategy_type, current_price)
@@ -821,12 +821,20 @@ class NSETrendScanner:
             trend_signals = self._get_trend_signals(stocks_data)
             for signal in trend_signals:
                 signal.strategy_type = 'TREND'
+                signal.strategy_score = signal.trend_score if hasattr(signal, 'trend_score') else 0
+                signal.volume_ratio = signal.indicators.get('volume_ratio', 0)
+                signal.breakout_strength = self._calculate_breakout_strength(signal.indicators)
+                signal.rank_score = self._calculate_rank_score(signal)
                 all_signals.append(signal)
         
         if self.strategy in ['verc', 'all']:
             verc_signals = self._get_verc_signals(stocks_data)
             for signal in verc_signals:
                 signal.strategy_type = 'VERC'
+                signal.strategy_score = signal.confidence_score if hasattr(signal, 'confidence_score') else 0
+                signal.volume_ratio = signal.relative_volume if hasattr(signal, 'relative_volume') else 0
+                signal.breakout_strength = 0
+                signal.rank_score = self._calculate_rank_score(signal)
                 all_signals.append(signal)
         
         all_signals.sort(key=lambda x: getattr(x, 'rank_score', 0), reverse=True)
@@ -854,12 +862,20 @@ class NSETrendScanner:
             trend_signals = self._get_trend_signals(stocks_data)
             for signal in trend_signals:
                 signal.strategy_type = 'TREND'
+                signal.strategy_score = signal.trend_score if hasattr(signal, 'trend_score') else 0
+                signal.volume_ratio = signal.indicators.get('volume_ratio', 0)
+                signal.breakout_strength = self._calculate_breakout_strength(signal.indicators)
+                signal.rank_score = self._calculate_rank_score(signal)
                 all_signals.append(signal)
         
         if self.strategy in ['verc', 'all']:
             verc_signals = self._get_verc_signals(stocks_data)
             for signal in verc_signals:
                 signal.strategy_type = 'VERC'
+                signal.strategy_score = signal.confidence_score if hasattr(signal, 'confidence_score') else 0
+                signal.volume_ratio = signal.relative_volume if hasattr(signal, 'relative_volume') else 0
+                signal.breakout_strength = 0
+                signal.rank_score = self._calculate_rank_score(signal)
                 all_signals.append(signal)
         
         all_signals.sort(key=lambda x: getattr(x, 'rank_score', 0), reverse=True)
