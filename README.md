@@ -5,6 +5,7 @@ Automated trading scanner that monitors ~500 NSE stocks during market hours and 
 ## Features
 
 ### Core Scanning
+
 - **Stock Universe**: Monitors 500+ NSE stocks (NIFTY 50, NEXT 50, MIDCAP 150, SMALLCAP 250)
 - **Real-time Data**: Uses Yahoo Finance for 1-day (1D) OHLCV data
 - **Technical Indicators**: EMA 20, 50, 100, 200 + Volume MA 30 + RSI + ATR
@@ -13,12 +14,14 @@ Automated trading scanner that monitors ~500 NSE stocks during market hours and 
 - **MTF Strategy**: Multi-timeframe confirmation (1D, 1H, 15m) for stronger signals
 
 ### Smart Features
+
 - **Smart Alerts**: Telegram notifications with entry, stop loss, targets, and confidence score
 - **Scheduled Scanning**: Runs every 15 minutes during market hours (09:15 - 15:30 IST)
 - **AI Analysis**: GPT-powered stock analysis with BUY/SELL/HOLD recommendations
 - **Two-way Telegram Bot**: Interactive bot - send stock symbols for instant analysis
 
 ### Learning & Optimization (v2.0)
+
 - **Trade Journal**: Logs EVERY alert with complete trade data (entry, SL, targets, outcome, RR, indicators)
 - **Strategy Performance Tracker**: Tracks win rate, avg RR, drawdown, holding time per strategy
 - **Auto-Optimization Engine**: Automatically adjusts strategy weights based on performance
@@ -33,6 +36,7 @@ Scan → Detect → Score → Rank → Select → Alert → Log → Track → Op
 ```
 
 ### Rank Score Formula
+
 ```
 rank_score = (strategy_score * strategy_weight * 0.6) + (volume_score * 0.2) + (breakout_strength * 0.2)
 ```
@@ -55,6 +59,7 @@ pip install -r requirements.txt
 
 **Option A: Config File (Recommended)**
 Edit `config/settings.json`:
+
 ```json
 {
   "telegram": {
@@ -65,6 +70,7 @@ Edit `config/settings.json`:
 ```
 
 **Option B: Environment Variables**
+
 ```bash
 # On Windows
 set TELEGRAM_BOT_TOKEN=your_bot_token
@@ -72,20 +78,24 @@ set TELEGRAM_CHAT_ID=your_chat_id
 ```
 
 ### 2. Stock List
+
 The stock list is configured in [`config/stocks.json`](config/stocks.json).
 
 ### 3. AI Configuration (Optional)
+
 To enable AI-powered stock analysis, set `OPENAI_API_KEY` environment variable.
 
 ## Usage
 
 ### Start Scanner (Runs every 15 minutes during market hours)
+
 ```bash
 python -m src.main
 python -m src.main --test  # Single scan test
 ```
 
 ### Run Specific Strategy
+
 ```bash
 python -m src.main --strategy trend   # Only Trend Detection
 python -m src.main --strategy verc    # Only VERC
@@ -93,17 +103,19 @@ python -m src.main --strategy all     # All strategies (default)
 ```
 
 ### Enable Telegram Bot
+
 ```bash
 python -m src.main --enable-telegram-bot
 ```
 
 ### Telegram Bot Commands
-| Command | Description |
-|---------|-------------|
-| `RELIANCE` | Send stock symbol for instant AI analysis |
-| `/analyze RELIANCE` | AI-powered stock analysis |
-| `/trend HDFCBANK` | Technical trend analysis |
-| `/status` | Check scanner status |
+
+| Command             | Description                               |
+| ------------------- | ----------------------------------------- |
+| `RELIANCE`          | Send stock symbol for instant AI analysis |
+| `/analyze RELIANCE` | AI-powered stock analysis                 |
+| `/trend HDFCBANK`   | Technical trend analysis                  |
+| `/status`           | Check scanner status                      |
 
 ## Project Structure
 
@@ -167,6 +179,7 @@ trade = {
 ## No-Trade Conditions
 
 Avoid signals when:
+
 - ATR very low (dead stock)
 - Choppy candles (wick > body)
 - NIFTY unclear direction (SIDEWAYS)
@@ -174,11 +187,13 @@ Avoid signals when:
 ## AI Learning Layer (Strict Mode)
 
 AI does NOT control signals. AI role:
+
 - Analyze journal data
 - Detect failure patterns
 - Suggest parameter improvements
 
 Example output:
+
 ```
 Insight:
 - TREND failing in low volume stocks
@@ -194,3 +209,90 @@ Insight:
 ## Disclaimer
 
 This software is for educational purposes only. Trading in financial markets involves substantial risk. Always do your own research.
+
+1. Weight change is too linear
+   +0.1 or -0.1
+
+👉 Problem:
+
+same reaction for small and big problems
+🔥 Fix
+adjustment = (win_rate - 50) / 100 # range ~ -0.5 to +0.5
+raw_weight = current_weight + adjustment
+
+2. Right now:
+
+last 50 trades = equal weight
+
+👉 Problem:
+Old trades shouldn’t matter equally.
+
+🔥 Fix
+
+Inside stats:
+
+recent_weight = 0.7
+old_weight = 0.3
+
+Or:
+
+last 20 trades → higher importance
+
+3.Adaptive filters are too aggressive
+volume_ratio_min += 0.3
+
+👉 Problem:
+
+3–4 bad cycles → system becomes too strict
+🔥 Fix
+
+Add cap + smoothing:
+
+self.adaptive_filters['volume_ratio_min'] = min(
+2.5,
+current + 0.1
+)
+
+4. No context-based learning
+
+Right now:
+
+👉 TREND = one weight globally
+
+But reality:
+
+TREND works in trending market
+fails in sideways
+🔥 Next level (this is where real edge is)
+
+Add:
+
+(strategy, market_condition)
+
+Example:
+
+weights = {
+("TREND", "TRENDING"): 1.2,
+("TREND", "SIDEWAYS"): 0.6
+}
+
+5. 1. Upgrade scoring logic (VERY IMPORTANT)
+
+👉 Replace win_rate-only with:
+
+win_rate
+avg_rr
+drawdown 2. Add proportional weight adjustment
+
+Kill fixed ±0.1
+
+3. Add recency bias
+
+Recent trades matter more.
+
+4. Add market condition layer
+
+Even simple:
+
+if nifty_sideways:
+reduce TREND weight

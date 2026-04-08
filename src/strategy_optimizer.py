@@ -24,6 +24,11 @@ class StrategyPerformanceTracker:
     
     PERFORMANCE_FILE = 'strategy_performance.json'
     
+    WEIGHT_BOUNDS = (0.1, 1.0)
+    DEFAULT_SMOOTHING = 0.3
+    MIN_TRADES_THRESHOLD = 10
+    SCORE_THRESHOLD = 40.0
+    
     def __init__(self, trade_journal, data_dir: str = DATA_DIR):
         self.trade_journal = trade_journal
         self.data_dir = data_dir
@@ -33,6 +38,16 @@ class StrategyPerformanceTracker:
             'VERC': 0.5,
             'MTF': 0.5
         }
+        
+        self.weight_history = {
+            'TREND': [],
+            'VERC': [],
+            'MTF': []
+        }
+        
+        self.smoothing_factor = self.DEFAULT_SMOOTHING
+        self.min_trades = self.MIN_TRADES_THRESHOLD
+        self.score_threshold = self.SCORE_THRESHOLD
         
         self.adaptive_filters = {
             'volume_ratio_min': 1.5,
@@ -110,12 +125,44 @@ class StrategyPerformanceTracker:
             'MTF': self.get_strategy_stats('MTF')
         }
     
+    def _bound_weight(self, weight: float) -> float:
+        """Clamp weight within defined bounds."""
+        return max(self.WEIGHT_BOUNDS[0], min(self.WEIGHT_BOUNDS[1], weight))
+    
+    def _smooth_weight(self, current: float, target: float) -> float:
+        """Apply exponential smoothing to weight changes."""
+        return current + self.smoothing_factor * (target - current)
+    
+    def _calculate_performance_score(self, stats: Dict[str, Any]) -> float:
+        """
+        Calculate composite performance score.
+        
+        score = (win_rate * 0.5) + (avg_rr * 20 * 0.3) - (max_drawdown * 0.2)
+        
+        Args:
+            stats: Strategy stats dict
+            
+        Returns:
+            Composite score
+        """
+        win_rate = stats.get('win_rate', 0)
+        avg_rr = stats.get('avg_rr', 0)
+        max_drawdown = stats.get('max_drawdown', 0)
+        
+        score = (win_rate * 0.5) + (avg_rr * 20 * 0.3) - (max_drawdown * 0.2)
+        
+        return round(score, 2)
+    
     def auto_optimize(self) -> Dict[str, Any]:
         """
         Auto-Optimization Engine.
-        Adjust strategy weights based on performance:
-        - If win_rate < 40%: reduce strategy_weight
-        - If win_rate > 60%: increase strategy_weight
+        Adjust strategy weights based on composite performance score:
+        - Smoothing: gradual weight changes using EMA
+        - Min trade threshold: require minimum trades before optimizing
+        - Bounded weights: keep weights within defined range
+        
+        Score formula:
+            score = (win_rate * 0.5) + (avg_rr * 20 * 0.3) - (max_drawdown * 0.2)
         
         Returns:
             Dict with changes made
@@ -124,27 +171,47 @@ class StrategyPerformanceTracker:
         
         for strategy in ['TREND', 'VERC', 'MTF']:
             stats = self.get_strategy_stats(strategy)
-            win_rate = stats.get('win_rate', 0)
+            trade_count = stats.get('trades', 0)
+            
+            if trade_count < self.min_trades:
+                continue
+            
             current_weight = self.strategy_weights.get(strategy, 0.5)
+            score = self._calculate_performance_score(stats)
             
-            new_weight = current_weight
+            raw_weight = current_weight
             
-            if win_rate < 40:
-                new_weight = max(0.1, current_weight - 0.1)
+            if score < self.score_threshold - 10:
+                raw_weight = max(self.WEIGHT_BOUNDS[0], current_weight - 0.1)
+            elif score > self.score_threshold + 10:
+                raw_weight = min(self.WEIGHT_BOUNDS[1], current_weight + 0.1)
+            
+            new_weight = self._bound_weight(self._smooth_weight(current_weight, raw_weight))
+            new_weight = round(new_weight, 3)
+            
+            if abs(new_weight - current_weight) > 0.01:
+                if score < self.score_threshold - 10:
+                    action = 'reduced'
+                    reason = f'score ({score}) < {self.score_threshold - 10}'
+                elif score > self.score_threshold + 10:
+                    action = 'increased'
+                    reason = f'score ({score}) > {self.score_threshold + 10}'
+                else:
+                    action = 'stable'
+                    reason = f'score ({score}) in range'
+                
                 changes[strategy] = {
-                    'action': 'reduced',
+                    'action': action,
                     'from': current_weight,
                     'to': new_weight,
-                    'reason': f'win_rate ({win_rate}%) < 40%'
+                    'trades': trade_count,
+                    'score': score,
+                    'reason': reason
                 }
-            elif win_rate > 60:
-                new_weight = min(1.0, current_weight + 0.1)
-                changes[strategy] = {
-                    'action': 'increased',
-                    'from': current_weight,
-                    'to': new_weight,
-                    'reason': f'win_rate ({win_rate}%) > 60%'
-                }
+                
+                self.weight_history[strategy].append(new_weight)
+                if len(self.weight_history[strategy]) > 20:
+                    self.weight_history[strategy] = self.weight_history[strategy][-20:]
             
             self.strategy_weights[strategy] = new_weight
         
@@ -275,13 +342,61 @@ class StrategyPerformanceTracker:
         except Exception as e:
             logger.error(f"Error saving filters: {e}")
     
+    def configure_optimization(
+        self,
+        smoothing: Optional[float] = None,
+        min_trades: Optional[int] = None,
+        weight_bounds: Optional[tuple] = None,
+        score_threshold: Optional[float] = None
+    ) -> None:
+        """
+        Configure optimization parameters.
+        
+        Args:
+            smoothing: EMA factor (0.1 = gradual, 0.9 = fast)
+            min_trades: Minimum trades before optimization
+            weight_bounds: Tuple of (min, max) weights
+            score_threshold: Score threshold for weight adjustments
+        """
+        if smoothing is not None:
+            self.smoothing_factor = max(0.1, min(0.9, smoothing))
+        
+        if min_trades is not None:
+            self.min_trades = max(1, min_trades)
+        
+        if weight_bounds is not None:
+            self.WEIGHT_BOUNDS = (
+                max(0.0, min(weight_bounds[0], 1.0)),
+                max(0.0, min(weight_bounds[1], 1.0))
+            )
+        
+        if score_threshold is not None:
+            self.score_threshold = max(0.0, score_threshold)
+        
+        logger.info(
+            f"Optimization config: smoothing={self.smoothing_factor}, "
+            f"min_trades={self.min_trades}, bounds={self.WEIGHT_BOUNDS}, "
+            f"score_threshold={self.score_threshold}"
+        )
+    
     def get_status_report(self) -> Dict[str, Any]:
         """Get comprehensive status report."""
+        all_stats = self.get_all_strategy_stats()
         return {
             'strategy_weights': self.strategy_weights,
             'adaptive_filters': self.adaptive_filters,
-            'performance': self.get_all_strategy_stats(),
-            'rank_formula': self.get_rank_score_formula()
+            'performance': all_stats,
+            'scores': {
+                s: self._calculate_performance_score(stats)
+                for s, stats in all_stats.items()
+            },
+            'rank_formula': self.get_rank_score_formula(),
+            'optimization_config': {
+                'smoothing_factor': self.smoothing_factor,
+                'min_trades_threshold': self.min_trades,
+                'weight_bounds': self.WEIGHT_BOUNDS,
+                'score_threshold': self.score_threshold
+            }
         }
 
 

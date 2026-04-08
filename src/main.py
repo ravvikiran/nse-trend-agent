@@ -418,6 +418,7 @@ class NSETrendScanner:
         """
         Calculate rank score per PRD v2.0 formula:
         rank_score = strategy_score * 0.6 + volume_score * 0.2 + breakout_strength * 0.2
+        Then multiply by dynamic weight from performance_tracker
         """
         strategy_score = signal.strategy_score
         
@@ -426,6 +427,11 @@ class NSETrendScanner:
         breakout_strength = signal.breakout_strength * 10
         
         rank_score = (strategy_score * 0.6) + (volume_score * 0.2) + (breakout_strength * 0.2)
+        
+        strategy_type = getattr(signal, 'strategy_type', 'TREND')
+        dynamic_weight = self.strategy_optimizer.strategy_weights.get(strategy_type, 0.5)
+        
+        rank_score = rank_score * dynamic_weight
         
         return round(rank_score, 2)
     
