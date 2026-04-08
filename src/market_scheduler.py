@@ -45,7 +45,43 @@ class MarketScheduler:
         self.scan_callback = None
         self.pm_update_callback = None
         self.ist = pytz.timezone('Asia/Kolkata')
+        self.data_fetcher = None
+        self.get_trend_signals_fn = None
+        self.get_verc_signals_fn = None
+        self.process_signal_fn = None
+        self.trade_journal = None
+        self.alert_service = None
+        self.strategy = 'trend'
+        self.stocks = []
         logger.debug("MarketScheduler initialized")
+
+    def set_scanner_components(
+        self,
+        data_fetcher,
+        get_trend_signals_fn,
+        get_verc_signals_fn,
+        process_signal_fn,
+        strategy='trend',
+        stocks=None
+    ):
+        """Set scanner components for direct execution."""
+        self.data_fetcher = data_fetcher
+        self.get_trend_signals_fn = get_trend_signals_fn
+        self.get_verc_signals_fn = get_verc_signals_fn
+        self.process_signal_fn = process_signal_fn
+        self.strategy = strategy
+        self.stocks = stocks or []
+        logger.debug("Scanner components set for PM update")
+
+    def set_trade_journal(self, trade_journal):
+        """Set trade journal for signal tracking."""
+        self.trade_journal = trade_journal
+        logger.debug("Trade journal set")
+
+    def set_alert_service(self, alert_service):
+        """Set alert service for Telegram notifications."""
+        self.alert_service = alert_service
+        logger.debug("Alert service set")
     
     def is_market_open(self) -> bool:
         """
@@ -156,20 +192,66 @@ class MarketScheduler:
             logger.debug("No scan callback set")
     
     def run_pm_update(self):
-        """Execute the 3PM update callback if market is open."""
-        if not self.is_market_open():
-            logger.debug("Market is closed, skipping 3PM update")
-            return
-        
-        if self.pm_update_callback:
-            try:
-                logger.info("Executing 3PM update...")
+        """Execute 3PM update: trigger scanner, get signals, use trade journal for deduplication."""
+        try:
+            if not self.is_market_open():
+                logger.debug("Market is closed, skipping 3PM update")
+                return
+            
+            if self._has_scanner_components():
+                logger.info("Executing 3PM update with scanner components...")
+                self._execute_scanner_logic(is_startup=False)
+                logger.info("3PM update completed successfully")
+            elif self.pm_update_callback:
+                logger.info("Executing 3PM update via callback...")
                 self.pm_update_callback()
-                logger.info("3PM update completed")
-            except Exception as e:
-                logger.error(f"Error during 3PM update: {str(e)}")
-        else:
-            logger.debug("No PM update callback set")
+                logger.info("3PM update completed via callback")
+            else:
+                logger.warning("No scanner components or callback set for PM update")
+        except Exception as e:
+            logger.error(f"Error during 3PM update: {str(e)}")
+
+    def _has_scanner_components(self) -> bool:
+        """Check if all required scanner components are set."""
+        return (
+            self.data_fetcher is not None
+            and self.get_trend_signals_fn is not None
+            and self.process_signal_fn is not None
+            and self.trade_journal is not None
+        )
+
+    def _execute_scanner_logic(self, is_startup: bool = False):
+        """Execute scanner logic: fetch data, get signals, process with trade journal."""
+        try:
+            stocks_data = self.data_fetcher.fetch_multiple_stocks(self.stocks)
+            if not stocks_data:
+                logger.warning("No stock data fetched during PM update")
+                return
+            
+            all_signals = []
+            
+            if self.strategy in ['trend', 'all']:
+                trend_signals = self.get_trend_signals_fn(stocks_data)
+                for signal in trend_signals:
+                    signal.strategy_type = 'TREND'
+                    all_signals.append(signal)
+            
+            if self.strategy in ['verc', 'all'] and self.get_verc_signals_fn:
+                verc_signals = self.get_verc_signals_fn(stocks_data)
+                for signal in verc_signals:
+                    signal.strategy_type = 'VERC'
+                    all_signals.append(signal)
+            
+            all_signals.sort(key=lambda x: getattr(x, 'rank_score', 0), reverse=True)
+            final_signals = all_signals[:5]
+            
+            for signal in final_signals:
+                strategy_type = signal.strategy_type if hasattr(signal, 'strategy_type') and signal.strategy_type else 'TREND'
+                self.process_signal_fn(signal, strategy_type, is_startup=is_startup)
+            
+            logger.info(f"PM update processed {len(final_signals)} signals")
+        except Exception as e:
+            logger.error(f"Error executing scanner logic: {str(e)}")
     
     def schedule_jobs(self):
         """Schedule the scan jobs."""

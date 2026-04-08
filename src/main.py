@@ -119,6 +119,17 @@ class NSETrendScanner:
         self.scheduler.scan_callback = self.scan
         self.scheduler.pm_update_callback = self._run_pm_update_scan
         
+        self.scheduler.set_scanner_components(
+            data_fetcher=self.data_fetcher,
+            get_trend_signals_fn=self._get_trend_signals,
+            get_verc_signals_fn=self._get_verc_signals,
+            process_signal_fn=self._process_signal,
+            strategy=self.strategy,
+            stocks=self.stocks
+        )
+        self.scheduler.set_trade_journal(self.trade_journal)
+        self.scheduler.set_alert_service(self.alert_service)
+        
         # ==================== NEW: Reasoning + Learning Components ====================
         # History Manager - stores signal data
         self.history_manager = create_history_manager()
