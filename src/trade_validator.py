@@ -5,9 +5,6 @@ Validates signals against high-quality trade constraints:
 - Minimum Target 1 = 5%
 - Maximum Target 1 = 10%
 - Stop Loss strictly between 2% - 3%
-- Minimum breakout strength = 5%
-- Minimum volume ratio = 2.5x
-- Maximum RSI = 70
 """
 
 import logging
@@ -113,7 +110,7 @@ class TradeValidator:
     
     def validate_with_indicators(self, signal: Any) -> Tuple[bool, str]:
         """
-        Validate signal including breakout strength, volume ratio, and RSI.
+        Validate signal including breakout strength and volume ratio.
         
         Args:
             signal: Signal object
@@ -123,7 +120,7 @@ class TradeValidator:
         """
         breakout_strength = getattr(signal, 'breakout_strength', 0) * 100
         volume_ratio = getattr(signal, 'volume_ratio', 0)
-        rsi = getattr(signal, 'rsi', 50)
+        
         
         if breakout_strength < self.filters["min_breakout_strength"]:
             return False, f"Weak breakout: {breakout_strength:.2f}%"
@@ -131,8 +128,6 @@ class TradeValidator:
         if volume_ratio < self.filters["min_volume_ratio"]:
             return False, f"Low volume: {volume_ratio:.2f}x"
         
-        if rsi > self.filters["max_rsi"]:
-            return False, f"Overbought RSI: {rsi:.2f}"
         
         strategy_type = getattr(signal, 'strategy_type', 'TREND')
         return self.validate_signal(signal, strategy_type)
