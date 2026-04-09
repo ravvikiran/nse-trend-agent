@@ -11,6 +11,8 @@ import threading
 from datetime import datetime, time as dt_time
 from typing import Callable, Optional, Dict
 import pytz
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.executors.pool import ThreadPoolExecutor
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -75,6 +77,16 @@ class MarketScheduler:
         self.last_signal_time: Dict[str, float] = {}
         self.cooldown_minutes = self.DEFAULT_COOLDOWN_MINUTES
         self.market_condition = 'normal'
+        
+        # Initialize APScheduler for continuous jobs
+        executors = {
+            'default': ThreadPoolExecutor(max_workers=4)
+        }
+        self.scheduler = BackgroundScheduler(
+            executors=executors,
+            timezone=self.ist
+        )
+        
         logger.debug("MarketScheduler initialized")
 
     def set_scanner_components(
@@ -420,7 +432,12 @@ class MarketScheduler:
         self.running = True
         self.schedule_jobs()
         
-        # Start scheduler in background thread
+        # Start APScheduler for continuous jobs
+        if self.scheduler:
+            self.scheduler.start()
+            logger.debug("APScheduler started")
+        
+        # Start scheduler in background thread (for schedule library jobs)
         self.scheduler_thread = threading.Thread(target=self._run_scheduler, daemon=True)
         self.scheduler_thread.start()
         
@@ -433,6 +450,10 @@ class MarketScheduler:
         
         self.running = False
         schedule.clear()
+        
+        # Stop APScheduler
+        if self.scheduler:
+            self.scheduler.shutdown(wait=False)
         
         if self.scheduler_thread:
             self.scheduler_thread.join(timeout=5)
