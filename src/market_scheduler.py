@@ -291,16 +291,14 @@ class MarketScheduler:
     def schedule_jobs(self):
         """Schedule the scan jobs."""
         # Schedule scans every 15 minutes during market hours
+        # Each scan will check if it's 3PM and run signal generation
         schedule.every(self.SCAN_INTERVAL).minutes.do(self.run_scan)
         
-        # Schedule 10AM signal alert (10:00 IST)
-        schedule.every().day.at("10:00").do(self.run_am_update)
-        
-        # Schedule 3PM update (15:00 IST)
+        # Schedule 3PM update (15:00 IST) - calls run_signal_generation
         schedule.every().day.at("15:00").do(self.run_pm_update)
         
         logger.debug(f"Scheduled scans every {self.SCAN_INTERVAL} minutes during market hours")
-        logger.debug("Scheduled 10AM and 3PM signal alert jobs")
+        logger.debug("Scheduled 3PM signal generation job")
     
     def start(self):
         """Start the scheduler in a background thread."""
@@ -386,6 +384,53 @@ class MarketScheduler:
             self.run_scan()
         else:
             logger.debug("Cannot force scan - market is closed")
+    
+    def add_continuous_job(self, func: Callable, job_id: str = 'continuous_monitor') -> None:
+        """
+        Add continuous monitoring job - runs every 15 minutes during market hours.
+        Used for tracking active signals, checking SL/Target hits.
+        """
+        from apscheduler.triggers.interval import IntervalTrigger
+        
+        scan_interval = self.SCAN_INTERVAL
+        
+        trigger = IntervalTrigger(
+            minutes=scan_interval,
+            timezone=self.ist
+        )
+        
+        self.scheduler.add_job(
+            func,
+            trigger=trigger,
+            id=job_id,
+            name=f'Continuous Monitor (every {scan_interval} min)',
+            replace_existing=True
+        )
+        
+        logger.info(f"Continuous monitoring job scheduled: every {scan_interval} minutes")
+    
+    def add_signal_generation_job(self, func: Callable, job_id: str = 'signal_generator') -> None:
+        """
+        Add signal generation job - runs once daily at 3:00 PM IST.
+        Generates new trading signals (max 3 per day).
+        """
+        from apscheduler.triggers.cron import CronTrigger
+        
+        trigger = CronTrigger(
+            hour=self.PM_UPDATE_HOUR,
+            minute=self.PM_UPDATE_MINUTE,
+            timezone=self.ist
+        )
+        
+        self.scheduler.add_job(
+            func,
+            trigger=trigger,
+            id=job_id,
+            name=f'Signal Generator (daily at {self.PM_UPDATE_HOUR}:{self.PM_UPDATE_MINUTE:02d} IST)',
+            replace_existing=True
+        )
+        
+        logger.info(f"Signal generation job scheduled: {self.PM_UPDATE_HOUR}:{self.PM_UPDATE_MINUTE:02d} IST")
 
 
 def create_scheduler(scan_callback: Callable) -> MarketScheduler:

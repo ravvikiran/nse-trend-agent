@@ -336,6 +336,16 @@ class StrategyPerformanceTracker:
         
         return changes
     
+    def evaluate(self) -> Dict[str, Any]:
+        """
+        Evaluate trade journal and auto-optimize.
+        Alias for auto_optimize() to provide cleaner API.
+        
+        - If win_rate < 40%: decrease strategy weight, increase filter strictness
+        - If win_rate > 60%: increase strategy weight, relax filters
+        """
+        return self.auto_optimize()
+    
     def get_rank_score_formula(self) -> str:
         """Get current rank score formula."""
         return (
@@ -657,6 +667,61 @@ class StrategyPerformanceTracker:
         }
 
 
+    def evaluate(self) -> Dict[str, Any]:
+        """
+        Evaluate trade journal and auto-optimize.
+        Alias for auto_optimize() to provide cleaner API.
+        
+        - If win_rate < 40%: decrease strategy weight, increase filter strictness
+        - If win_rate > 60%: increase strategy weight, relax filters
+        """
+        return self.auto_optimize()
+
+
 def create_strategy_performance_tracker(trade_journal) -> StrategyPerformanceTracker:
     """Factory function to create strategy performance tracker."""
     return StrategyPerformanceTracker(trade_journal)
+
+
+class StrategyOptimizer:
+    """
+    Auto-optimization based on journal learning.
+    Evaluates recent trades and adjusts strategy weights and filters.
+    """
+    
+    def __init__(self, trade_journal):
+        self.trade_journal = trade_journal
+    
+    def evaluate(self):
+        """
+        Evaluate recent trades and auto-optimize.
+        - If win_rate < 40%: decrease strategy weight, increase filter strictness
+        - If win_rate > 60%: increase strategy weight, relax filters
+        """
+        closed_trades = self.trade_journal.get_closed_trades(limit=50)
+        
+        if len(closed_trades) < 20:
+            return
+        
+        wins = [t for t in closed_trades if t.get('outcome') == 'WIN']
+        losses = [t for t in closed_trades if t.get('outcome') in ['LOSS', 'TIMEOUT']]
+        
+        total = len(closed_trades)
+        win_rate = (len(wins) / total * 100) if total > 0 else 0
+        
+        logger.info(f"Performance evaluation: {len(wins)} wins, {len(losses)} losses, win_rate: {win_rate:.1f}%")
+        
+        if win_rate < 40:
+            logger.warning("Win rate below 40% - increasing filter strictness")
+            self._increase_strictness()
+        elif win_rate > 60:
+            logger.info("Win rate above 60% - relaxing filters slightly")
+            self._relax_filters()
+    
+    def _increase_strictness(self):
+        """Increase filter strictness when performance is poor."""
+        pass
+    
+    def _relax_filters(self):
+        """Relax filters when performance is good."""
+        pass

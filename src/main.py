@@ -10,7 +10,7 @@ import logging
 import threading
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import pandas as pd
 import pytz
 
@@ -50,6 +50,12 @@ from ai_learning_layer import create_ai_learning_layer
 # New: Factor Analyzer & Market Context
 from factor_analyzer import create_factor_analyzer
 from market_context import create_market_context_engine
+
+# Trade Validator
+from trade_validator import create_trade_validator
+
+# Consolidation Detector
+from consolidation_detector import is_tight_consolidation, is_valid_breakout, is_strong_breakout
 
 
 def setup_logging(log_level='INFO', log_file='logs/scanner.log'):
@@ -120,9 +126,9 @@ class NSETrendScanner:
         
         # Initialize scheduler
         self.scheduler = MarketScheduler()
-        self.scheduler.scan_callback = self.scan
-        self.scheduler.pm_update_callback = self._run_pm_update_scan
-        self.scheduler.am_update_callback = self._run_pm_update_scan  # 10AM uses same logic as 3PM
+        self.scheduler.scan_callback = self.run_cycle  # Changed: Use run_cycle for 15-min monitoring
+        self.scheduler.pm_update_callback = self.run_signal_generation  # 3PM signal generation
+        self.scheduler.am_update_callback = self.run_signal_generation  # 10AM signal generation
         
         self.scheduler.set_scanner_components(
             data_fetcher=self.data_fetcher,
@@ -182,6 +188,18 @@ class NSETrendScanner:
         
         # ==================== NEW: Market Context Engine ====================
         self.market_context_engine = create_market_context_engine(self.data_fetcher)
+        
+        # ==================== Trade Validator ====================
+        self.trade_validator = create_trade_validator(self.settings)
+        
+        # ==================== Signal Mode Configuration ====================
+        signal_mode = self.settings.get('signal_mode', {})
+        self.daily_signal_hour = signal_mode.get('daily_signal_hour', 15)
+        self.max_signals_per_day = signal_mode.get('max_signals_per_day', 3)
+        self.confidence_threshold = signal_mode.get('confidence_threshold', 7)
+        self.deduplication_days = signal_mode.get('deduplication_days', 5)
+        self._signals_sent_today = 0
+        self._last_signal_date = None
         
         # Signal tracking interval (check every N scans)
         self.signal_check_interval = self.settings.get('learning', {}).get('signal_tracking', {}).get('check_interval_scans', 4)
@@ -302,6 +320,402 @@ class NSETrendScanner:
             # Silently handle errors to keep scanner running
             pass
     
+    def run_cycle(self):
+        """
+        Main cycle that runs every 15 minutes.
+        - ALWAYS RUN: Monitor active trades
+        - ONLY RUN AT 3:00 PM: Signal generation
+        """
+        from datetime import datetime
+        
+        ist = pytz.timezone('Asia/Kolkata')
+        current_time = datetime.now(ist)
+        
+        # ALWAYS RUN: Monitor active trades
+        self.monitor_active_trades()
+        
+        # ONLY RUN AT 3:00 PM
+        if current_time.hour == 15 and current_time.minute == 0:
+            self.run_signal_generation()
+    
+    def monitor_active_trades(self):
+        """
+        Monitor active trades every 15 minutes.
+        Checks for Target 1, Target 2, Target 3, and Stop Loss hits.
+        """
+        try:
+            active_trades = self.trade_journal.get_active_trades()
+            
+            if not active_trades:
+                return
+            
+            logger.info(f"Monitoring {len(active_trades)} active trades")
+            
+            for trade in active_trades:
+                self._check_trade_levels(trade)
+                
+        except Exception as e:
+            logger.error(f"Error monitoring active trades: {e}")
+    
+    def _check_trade_levels(self, trade):
+        """
+        Check trade levels and trigger alerts/close trades.
+        - Target 1, 2: Send alert, mark as hit, continue trade
+        - Target 3: Send alert, close trade as WIN
+        - Stop Loss: Send alert, close trade as LOSS
+        """
+        symbol = trade.get('symbol')
+        entry = trade.get('entry', 0)
+        targets = trade.get('targets', [])
+        stop_loss = trade.get('stop_loss', 0)
+        
+        if not targets or len(targets) < 3:
+            return
+        
+        try:
+            current_price = self._get_current_price(symbol)
+            if not current_price:
+                return
+            
+            t1_hit = trade.get('t1_hit', False)
+            t2_hit = trade.get('t2_hit', False)
+            
+            # TARGET 1
+            if not t1_hit and current_price >= targets[0]:
+                self._send_target_hit_alert(trade, 1, current_price)
+                self.trade_journal.update_trade_field(trade.get('trade_id'), 't1_hit', True)
+                logger.info(f"TARGET 1 HIT: {symbol} @ {current_price}")
+            
+            # TARGET 2
+            if not t2_hit and current_price >= targets[1]:
+                self._send_target_hit_alert(trade, 2, current_price)
+                self.trade_journal.update_trade_field(trade.get('trade_id'), 't2_hit', True)
+                logger.info(f"TARGET 2 HIT: {symbol} @ {current_price}")
+            
+            # TARGET 3 (FINAL EXIT - WIN)
+            if current_price >= targets[2]:
+                self._send_target_hit_alert(trade, 3, current_price)
+                self._close_trade(trade, "WIN", current_price)
+                logger.info(f"TARGET 3 HIT - TRADE CLOSED: {symbol} @ {current_price}")
+                return
+            
+            # STOP LOSS (FINAL EXIT - LOSS)
+            if current_price <= stop_loss:
+                self._send_sl_hit_alert(trade, current_price)
+                self._close_trade(trade, "LOSS", current_price)
+                logger.info(f"STOP LOSS HIT - TRADE CLOSED: {symbol} @ {current_price}")
+                return
+                
+        except Exception as e:
+            logger.error(f"Error checking trade levels for {symbol}: {e}")
+    
+    def _get_current_price(self, symbol: str) -> Optional[float]:
+        """Get current price for a stock."""
+        try:
+            stock_data = self.data_fetcher.fetch_stock_data(f"{symbol}.NS", interval='1d', days=2)
+            if stock_data is not None and len(stock_data) > 0:
+                return float(stock_data.iloc[-1].get('close', 0))
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching price for {symbol}: {e}")
+            return None
+    
+    def _send_target_hit_alert(self, trade, target_num: int, current_price: float):
+        """Send alert when a target is hit."""
+        symbol = trade.get('symbol')
+        entry = trade.get('entry', 0)
+        
+        profit_pct = ((current_price - entry) / entry) * 100
+        
+        if target_num == 3:
+            message = f"""🎯 TARGET 3 HIT - {symbol}
+
+Entry: ₹{entry:.2f}
+Current: ₹{current_price:.2f}
+Profit: +{profit_pct:.1f}%
+
+✅ TRADE CLOSED WITH PROFIT"""
+        else:
+            message = f"""🎯 TARGET {target_num} HIT - {symbol}
+
+Entry: ₹{entry:.2f}
+Current: ₹{current_price:.2f}
+Profit: +{profit_pct:.1f}%
+
+📊 Trade remains active - monitoring for next target"""
+        
+        target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
+        target_method(message)
+    
+    def _send_sl_hit_alert(self, trade, current_price: float):
+        """Send alert when stop loss is hit."""
+        symbol = trade.get('symbol')
+        entry = trade.get('entry', 0)
+        
+        loss_pct = ((entry - current_price) / entry) * 100
+        
+        message = f"""🛑 STOP LOSS HIT - {symbol}
+
+Entry: ₹{entry:.2f}
+Exit: ₹{current_price:.2f}
+Loss: -{loss_pct:.1f}%
+
+❌ TRADE CLOSED"""
+        
+        target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
+        target_method(message)
+    
+    def _close_trade(self, trade, outcome: str, exit_price: float):
+        """Close a trade and update the journal."""
+        trade_id = trade.get('trade_id')
+        
+        self.trade_journal.update_trade(trade_id, outcome, exit_price)
+        
+        self.strategy_optimizer.evaluate()
+        
+        logger.info(f"Trade closed: {trade_id} - {outcome}")
+    
+    def run_continuous_monitoring(self):
+        """
+        CONTINUOUS MODE - Every 15 minutes
+        Monitors active signals, checks for SL/Target hits.
+        Does NOT generate new signals - only tracks existing ones.
+        """
+        try:
+            self.monitor_active_trades()
+        except Exception as e:
+            logger.error(f"Error in continuous monitoring: {e}")
+    
+    def run_signal_generation(self):
+        """
+        SIGNAL GENERATION MODE - 3:00 PM only
+        Generates new trading signals with:
+        - All filters applied
+        - Max 3 signals per day
+        - Confidence threshold filtering
+        - Deduplication via trade journal and signal_memory
+        """
+        from datetime import datetime
+        
+        ist = pytz.timezone('Asia/Kolkata')
+        now = datetime.now(ist)
+        today = now.date()
+        
+        if self._last_signal_date != today:
+            self._signals_sent_today = 0
+            self._last_signal_date = today
+        
+        logger.info(f"Running signal generation - Signals today: {self._signals_sent_today}/{self.max_signals_per_day}")
+        
+        try:
+            stocks_data = self.data_fetcher.fetch_multiple_stocks(self.stocks)
+            if not stocks_data:
+                self._send_no_signals_message()
+                return
+            
+            all_signals = []
+            
+            from trade_journal import TradeJournal
+            
+            if self.strategy in ['trend', 'all']:
+                trend_signals = self._get_trend_signals(stocks_data)
+                for signal in trend_signals:
+                    signal.strategy_type = 'TREND'
+                    signal.strategy_score = signal.trend_score if hasattr(signal, 'trend_score') else 0
+                    signal.volume_ratio = signal.indicators.get('volume_ratio', 0)
+                    signal.breakout_strength = self._calculate_breakout_strength(signal.indicators)
+                    
+                    is_valid, reason = self.trade_validator.validate_with_indicators(signal)
+                    if not is_valid:
+                        logger.info(f"Signal {signal.ticker} rejected by trade validator: {reason}")
+                        continue
+                    
+                    df = stocks_data.get(signal.ticker)
+                    
+                    if not is_tight_consolidation(df):
+                        logger.info(f"❌ Rejected {signal.ticker}: No tight consolidation")
+                        continue
+                    
+                    if not is_strong_breakout(df):
+                        logger.info(f"❌ Rejected {signal.ticker}: Weak breakout")
+                        continue
+                    
+                    breakout_type = is_valid_breakout(df)
+                    if breakout_type is None or breakout_type != 'BUY':
+                        logger.info(f"❌ Rejected {signal.ticker}: No valid breakout")
+                        continue
+                    
+                    signal.base_rank_score = self._calculate_base_rank_score(signal)
+                    signal.rank_score = signal.base_rank_score
+                    signal.market_context = self.market_context_engine.get_context()
+                    signal.quality = TradeJournal.calculate_quality(
+                        signal.strategy_score,
+                        signal.volume_ratio,
+                        signal.breakout_strength
+                    )
+                    signal.final_score = self._calculate_final_score(signal)
+                    all_signals.append(signal)
+            
+            if self.strategy in ['verc', 'all']:
+                verc_signals = self._get_verc_signals(stocks_data)
+                for signal in verc_signals:
+                    signal.strategy_type = 'VERC'
+                    signal.strategy_score = signal.confidence_score if hasattr(signal, 'confidence_score') else 0
+                    signal.volume_ratio = signal.relative_volume if hasattr(signal, 'relative_volume') else 0
+                    signal.breakout_strength = 0
+                    
+                    is_valid, reason = self.trade_validator.validate_with_indicators(signal)
+                    if not is_valid:
+                        logger.info(f"Signal {signal.stock_symbol} rejected by trade validator: {reason}")
+                        continue
+                    
+                    df = stocks_data.get(signal.stock_symbol)
+                    
+                    if not is_tight_consolidation(df):
+                        logger.info(f"❌ Rejected {signal.stock_symbol}: No tight consolidation")
+                        continue
+                    
+                    if not is_strong_breakout(df):
+                        logger.info(f"❌ Rejected {signal.stock_symbol}: Weak breakout")
+                        continue
+                    
+                    breakout_type = is_valid_breakout(df)
+                    if breakout_type is None or breakout_type != 'BUY':
+                        logger.info(f"❌ Rejected {signal.stock_symbol}: No valid breakout")
+                        continue
+                    
+                    signal.base_rank_score = self._calculate_base_rank_score(signal)
+                    signal.rank_score = signal.base_rank_score
+                    signal.market_context = self.market_context_engine.get_context()
+                    signal.quality = TradeJournal.calculate_quality(
+                        signal.strategy_score,
+                        signal.volume_ratio,
+                        0
+                    )
+                    signal.final_score = self._calculate_final_score(signal)
+                    all_signals.append(signal)
+            
+            all_signals.sort(key=lambda x: getattr(x, 'final_score', 0), reverse=True)
+            
+            filtered_signals = []
+            for signal in all_signals:
+                if self._signals_sent_today >= self.max_signals_per_day:
+                    break
+                
+                ticker = signal.ticker if hasattr(signal, 'ticker') else signal.stock_symbol
+                
+                if self.trade_journal.check_signal_exists(ticker, signal.strategy_type):
+                    logger.info(f"Skipping {ticker}: already exists in trade journal")
+                    continue
+                
+                if self.signal_memory.is_duplicate(ticker):
+                    logger.info(f"Skipping {ticker}: recent signal in memory")
+                    continue
+                
+                confidence = getattr(signal, 'final_score', 0)
+                if confidence < self.confidence_threshold:
+                    logger.info(f"Skipping {ticker}: confidence {confidence} < threshold {self.confidence_threshold}")
+                    continue
+                
+                filtered_signals.append(signal)
+            
+            filtered_signals = filtered_signals[:self.max_signals_per_day]
+            
+            if not filtered_signals:
+                self._send_no_signals_message()
+                return
+            
+            target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
+            
+            for signal in filtered_signals:
+                self._send_new_signal_alert(signal, target_method)
+                self._signals_sent_today += 1
+            
+            logger.info(f"Signal generation complete - Sent {len(filtered_signals)} signals")
+            
+        except Exception as e:
+            logger.error(f"Error in signal generation: {e}")
+    
+    def _calculate_final_score(self, signal) -> float:
+        """Calculate final score with all factors."""
+        strategy_score = signal.strategy_score
+        volume_score = min(signal.volume_ratio / 3.0, 1.0) * 10
+        breakout_score = signal.breakout_strength * 10
+        
+        base_score = (strategy_score * 0.6) + (volume_score * 0.2) + (breakout_score * 0.2)
+        
+        quality_score = 0
+        quality = getattr(signal, 'quality', 'C')
+        if quality == 'A':
+            quality_score = 2
+        elif quality == 'B':
+            quality_score = 1
+        
+        return round(base_score + quality_score, 2)
+    
+    def _send_new_signal_alert(self, signal, target_method):
+        """Send new signal alert in required format."""
+        ticker = signal.ticker if hasattr(signal, 'ticker') else signal.stock_symbol
+        strategy = signal.strategy_type
+        
+        if strategy == 'TREND':
+            indicators = signal.indicators
+            entry = indicators.get('close', 0)
+            ema50 = indicators.get('ema50', 0)
+            atr = indicators.get('atr', 0)
+            
+            stop_loss = min(ema50, entry * 0.98) if ema50 > 0 else entry * 0.98
+            if atr > 0:
+                stop_loss = min(stop_loss, entry - (2 * atr))
+            
+            risk = entry - stop_loss
+            t1 = entry + (risk * 2)
+            t2 = entry + (risk * 3)
+            t3 = entry + (risk * 4)
+        else:
+            entry = signal.entry_min if hasattr(signal, 'entry_min') else signal.current_price
+            stop_loss = signal.stop_loss
+            t1 = signal.target_1 if hasattr(signal, 'target_1') else 0
+            t2 = signal.target_2 if hasattr(signal, 'target_2') else 0
+            t3 = signal.target_3 if hasattr(signal, 'target_3') else 0
+        
+        quality = getattr(signal, 'quality', 'B')
+        context = getattr(signal, 'market_context', 'TRENDING')
+        score = getattr(signal, 'final_score', 0)
+        
+        alert = f"""🚀 STOCK: {ticker}
+
+💰 Entry: ₹{entry:.2f}
+🛑 Stop: ₹{stop_loss:.2f}
+
+🎯 Targets:
+{t1:.2f} / {t2:.2f} / {t3:.2f}
+
+⭐ Quality: {quality}
+🔥 Context: {context}
+
+⚡ Score: {score}"""
+        
+        target_method(alert)
+        
+        self.trade_journal.log_signal(
+            symbol=ticker,
+            strategy=strategy,
+            entry=entry,
+            stop_loss=stop_loss,
+            targets=[t1, t2, t3],
+            indicators={
+                'volume_ratio': signal.volume_ratio,
+                'final_score': score
+            },
+            quality=quality,
+            market_context=context,
+            entry_type='BREAKOUT',
+            breakout_strength=signal.breakout_strength
+        )
+        
+        logger.info(f"New signal sent: {ticker} ({strategy})")
+    
     def _run_mtf_strategy(self):
         """
         Run the Multi-Timeframe Strategy.
@@ -396,10 +810,31 @@ class NSETrendScanner:
             trend_signals = self._get_trend_signals(stocks_data)
             for signal in trend_signals:
                 if signal.ticker not in excluded_stocks:
+                    df = stocks_data.get(signal.ticker)
+                    
                     signal.strategy_type = 'TREND'
                     signal.strategy_score = signal.trend_score if hasattr(signal, 'trend_score') else 0
                     signal.volume_ratio = signal.indicators.get('volume_ratio', 0)
                     signal.breakout_strength = self._calculate_breakout_strength(signal.indicators)
+                    
+                    is_valid, reason = self.trade_validator.validate_with_indicators(signal)
+                    if not is_valid:
+                        logger.info(f"Signal {signal.ticker} rejected by trade validator: {reason}")
+                        continue
+                    
+                    if not is_tight_consolidation(df):
+                        logger.info(f"❌ Rejected {signal.ticker}: No tight consolidation")
+                        continue
+                    
+                    if not is_strong_breakout(df):
+                        logger.info(f"❌ Rejected {signal.ticker}: Weak breakout")
+                        continue
+                    
+                    breakout_type = is_valid_breakout(df)
+                    if breakout_type is None or breakout_type != 'BUY':
+                        logger.info(f"❌ Rejected {signal.ticker}: No valid breakout")
+                        continue
+                    
                     signal.base_rank_score = self._calculate_base_rank_score(signal)
                     
                     if market_context == 'SIDEWAYS' and signal.base_rank_score < 6:
@@ -435,6 +870,12 @@ class NSETrendScanner:
                     signal.strategy_score = signal.confidence_score if hasattr(signal, 'confidence_score') else 0
                     signal.volume_ratio = signal.relative_volume if hasattr(signal, 'relative_volume') else 0
                     signal.breakout_strength = 0
+                    
+                    is_valid, reason = self.trade_validator.validate_with_indicators(signal)
+                    if not is_valid:
+                        logger.info(f"Signal {signal.stock_symbol} rejected by trade validator: {reason}")
+                        continue
+                    
                     signal.base_rank_score = self._calculate_base_rank_score(signal)
                     
                     signal.rank_score = signal.base_rank_score
@@ -619,9 +1060,15 @@ class NSETrendScanner:
         entry_min = current_price
         entry_max = ema20 if ema20 > current_price else current_price * 1.005
         
-        stop_loss = min(ema50, current_price * 0.98)
+        stop_loss = min(ema50, current_price * 0.98) if ema50 > 0 else current_price * 0.98
         if atr > 0:
             stop_loss = min(stop_loss, current_price - (2 * atr))
+        
+        risk_pct = (entry_min - stop_loss) / entry_min * 100
+        if risk_pct < 2:
+            stop_loss = entry_min * 0.98
+        elif risk_pct > 3:
+            stop_loss = entry_min * 0.97
         
         risk = entry_min - stop_loss
         target_1 = entry_min + (risk * 2)
@@ -638,6 +1085,10 @@ class NSETrendScanner:
         rsi_value = indicators.get('rsi_value', 0) or indicators.get('rsi', 0)
         score_breakdown = signal.score_breakdown if hasattr(signal, 'score_breakdown') else indicators.get('score_breakdown', {})
         
+        sl_pct = ((entry_min - stop_loss) / entry_min) * 100
+        t1_pct = ((target_1 - entry_min) / entry_min) * 100
+        t2_pct = ((target_2 - entry_min) / entry_min) * 100
+        
         alert_lines = [
             "📈 TREND SIGNAL",
             "",
@@ -649,12 +1100,12 @@ class NSETrendScanner:
             "🎯 Entry Zone:",
             f"  Buy Above: ₹{entry_max:.2f}",
             "",
-            "🛡️ Stop Loss (ATR-based):",
-            f"  SL: ₹{stop_loss:.2f} ({((stop_loss/current_price)-1)*100:.1f}%)",
+            "🛡️ Stop Loss (2-3% enforced):",
+            f"  SL: ₹{stop_loss:.2f} ({sl_pct:.1f}%)",
             "",
             "🎯 Targets (RR ≥ 2:1):",
-            f"  Target 1: ₹{target_1:.2f} (+{((target_1/current_price)-1)*100:.1f}%) ETA: {time_t1}",
-            f"  Target 2: ₹{target_2:.2f} (+{((target_2/current_price)-1)*100:.1f}%) ETA: {time_t2}",
+            f"  Target 1: ₹{target_1:.2f} (+{t1_pct:.1f}%) ETA: {time_t1}",
+            f"  Target 2: ₹{target_2:.2f} (+{t2_pct:.1f}%) ETA: {time_t2}",
             ""
         ]
         
@@ -678,17 +1129,18 @@ class NSETrendScanner:
     
     def _format_verc_alert(self, signal, df=None):
         """Format VERC signal into detailed alert message."""
-        # Get current time in IST
         ist = pytz.timezone('Asia/Kolkata')
         now = datetime.now(ist)
         
-        # Calculate ATR and time estimation
         atr = self._calculate_atr(df) if df is not None else None
         time_t1 = self._estimate_time_to_target(signal.current_price, signal.target_1, atr) if atr else "Unknown"
         time_t2 = self._estimate_time_to_target(signal.current_price, signal.target_2, atr) if atr else "Unknown"
         
-        # Support and Resistance
         support, resistance = self._calculate_support_resistance(df) if df is not None else (None, None)
+        
+        sl_pct = ((signal.current_price - signal.stop_loss) / signal.current_price) * 100
+        t1_pct = ((signal.target_1 - signal.current_price) / signal.current_price) * 100
+        t2_pct = ((signal.target_2 - signal.current_price) / signal.current_price) * 100
         
         alert_lines = [
             "📊 VERC SIGNAL (Accumulation)",
@@ -706,12 +1158,12 @@ class NSETrendScanner:
             "🎯 Entry Zone:",
             f"  Buy Above: ₹{signal.entry_min:.2f} - ₹{signal.entry_max:.2f}",
             "",
-            "🛡️ Stop Loss:",
-            f"  SL: ₹{signal.stop_loss:.2f} ({((signal.stop_loss/signal.current_price)-1)*100:.1f}%)",
+            "🛡️ Stop Loss (2-3% enforced):",
+            f"  SL: ₹{signal.stop_loss:.2f} ({sl_pct:.1f}%)",
             "",
-            "🎯 Targets:",
-            f"  Target 1: ₹{signal.target_1:.2f} (+{((signal.target_1/signal.current_price)-1)*100:.1f}%) ETA: {time_t1}",
-            f"  Target 2: ₹{signal.target_2:.2f} (+{((signal.target_2/signal.current_price)-1)*100:.1f}%) ETA: {time_t2}",
+            "🎯 Targets (RR ≥ 2:1):",
+            f"  Target 1: ₹{signal.target_1:.2f} (+{t1_pct:.1f}%) ETA: {time_t1}",
+            f"  Target 2: ₹{signal.target_2:.2f} (+{t2_pct:.1f}%) ETA: {time_t2}",
             ""
         ]
         
@@ -959,20 +1411,62 @@ class NSETrendScanner:
         if self.strategy in ['trend', 'all']:
             trend_signals = self._get_trend_signals(stocks_data)
             for signal in trend_signals:
+                df = stocks_data.get(signal.ticker)
+                
                 signal.strategy_type = 'TREND'
                 signal.strategy_score = signal.trend_score if hasattr(signal, 'trend_score') else 0
                 signal.volume_ratio = signal.indicators.get('volume_ratio', 0)
                 signal.breakout_strength = self._calculate_breakout_strength(signal.indicators)
+                
+                is_valid, reason = self.trade_validator.validate_with_indicators(signal)
+                if not is_valid:
+                    logger.info(f"Signal {signal.ticker} rejected by trade validator: {reason}")
+                    continue
+                
+                if not is_tight_consolidation(df):
+                    logger.info(f"❌ Rejected {signal.ticker}: No tight consolidation")
+                    continue
+                
+                if not is_strong_breakout(df):
+                    logger.info(f"❌ Rejected {signal.ticker}: Weak breakout")
+                    continue
+                
+                breakout_type = is_valid_breakout(df)
+                if breakout_type is None or breakout_type != 'BUY':
+                    logger.info(f"❌ Rejected {signal.ticker}: No valid breakout")
+                    continue
+                
                 signal.rank_score = self._calculate_rank_score(signal)
                 all_signals.append(signal)
         
         if self.strategy in ['verc', 'all']:
             verc_signals = self._get_verc_signals(stocks_data)
             for signal in verc_signals:
+                df = stocks_data.get(signal.stock_symbol)
+                
                 signal.strategy_type = 'VERC'
                 signal.strategy_score = signal.confidence_score if hasattr(signal, 'confidence_score') else 0
                 signal.volume_ratio = signal.relative_volume if hasattr(signal, 'relative_volume') else 0
                 signal.breakout_strength = 0
+                
+                is_valid, reason = self.trade_validator.validate_with_indicators(signal)
+                if not is_valid:
+                    logger.info(f"Signal {signal.stock_symbol} rejected by trade validator: {reason}")
+                    continue
+                
+                if not is_tight_consolidation(df):
+                    logger.info(f"❌ Rejected {signal.stock_symbol}: No tight consolidation")
+                    continue
+                
+                if not is_strong_breakout(df):
+                    logger.info(f"❌ Rejected {signal.stock_symbol}: Weak breakout")
+                    continue
+                
+                breakout_type = is_valid_breakout(df)
+                if breakout_type is None or breakout_type != 'BUY':
+                    logger.info(f"❌ Rejected {signal.stock_symbol}: No valid breakout")
+                    continue
+                
                 signal.rank_score = self._calculate_rank_score(signal)
                 all_signals.append(signal)
         
@@ -1000,20 +1494,62 @@ class NSETrendScanner:
         if self.strategy in ['trend', 'all']:
             trend_signals = self._get_trend_signals(stocks_data)
             for signal in trend_signals:
+                df = stocks_data.get(signal.ticker)
+                
                 signal.strategy_type = 'TREND'
                 signal.strategy_score = signal.trend_score if hasattr(signal, 'trend_score') else 0
                 signal.volume_ratio = signal.indicators.get('volume_ratio', 0)
                 signal.breakout_strength = self._calculate_breakout_strength(signal.indicators)
+                
+                is_valid, reason = self.trade_validator.validate_with_indicators(signal)
+                if not is_valid:
+                    logger.info(f"Signal {signal.ticker} rejected by trade validator: {reason}")
+                    continue
+                
+                if not is_tight_consolidation(df):
+                    logger.info(f"❌ Rejected {signal.ticker}: No tight consolidation")
+                    continue
+                
+                if not is_strong_breakout(df):
+                    logger.info(f"❌ Rejected {signal.ticker}: Weak breakout")
+                    continue
+                
+                breakout_type = is_valid_breakout(df)
+                if breakout_type is None or breakout_type != 'BUY':
+                    logger.info(f"❌ Rejected {signal.ticker}: No valid breakout")
+                    continue
+                
                 signal.rank_score = self._calculate_rank_score(signal)
                 all_signals.append(signal)
         
         if self.strategy in ['verc', 'all']:
             verc_signals = self._get_verc_signals(stocks_data)
             for signal in verc_signals:
+                df = stocks_data.get(signal.stock_symbol)
+                
                 signal.strategy_type = 'VERC'
                 signal.strategy_score = signal.confidence_score if hasattr(signal, 'confidence_score') else 0
                 signal.volume_ratio = signal.relative_volume if hasattr(signal, 'relative_volume') else 0
                 signal.breakout_strength = 0
+                
+                is_valid, reason = self.trade_validator.validate_with_indicators(signal)
+                if not is_valid:
+                    logger.info(f"Signal {signal.stock_symbol} rejected by trade validator: {reason}")
+                    continue
+                
+                if not is_tight_consolidation(df):
+                    logger.info(f"❌ Rejected {signal.stock_symbol}: No tight consolidation")
+                    continue
+                
+                if not is_strong_breakout(df):
+                    logger.info(f"❌ Rejected {signal.stock_symbol}: Weak breakout")
+                    continue
+                
+                breakout_type = is_valid_breakout(df)
+                if breakout_type is None or breakout_type != 'BUY':
+                    logger.info(f"❌ Rejected {signal.stock_symbol}: No valid breakout")
+                    continue
+                
                 signal.rank_score = self._calculate_rank_score(signal)
                 all_signals.append(signal)
         
@@ -1118,15 +1654,36 @@ class NSETrendScanner:
             still_active = result.get('still_active', [])
             
             if completed:
+                target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
+                
                 for signal in completed:
                     trade_id = signal.get('signal_id', '')
                     outcome = signal.get('outcome', 'UNKNOWN')
                     exit_price = signal.get('current_price', 0)
+                    entry_price = signal.get('entry_price', 0)
+                    stock_symbol = signal.get('stock_symbol', '')
                     
                     if outcome == 'TARGET_HIT':
                         self.trade_journal.update_trade(trade_id, 'WIN', exit_price)
+                        
+                        return_pct = ((exit_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
+                        alert = f"""🎯 TARGET HIT: {stock_symbol}
+
+Entry: ₹{entry_price:.2f}
+Target: ₹{exit_price:.2f}
+Return: +{return_pct:.1f}%"""
+                        target_method(alert)
+                        
                     elif outcome == 'SL_HIT':
                         self.trade_journal.update_trade(trade_id, 'LOSS', exit_price)
+                        
+                        loss_pct = ((entry_price - exit_price) / entry_price) * 100 if entry_price > 0 else 0
+                        alert = f"""🛑 STOP LOSS: {stock_symbol}
+
+Entry: ₹{entry_price:.2f}
+SL: ₹{exit_price:.2f}
+Loss: -{loss_pct:.1f}%"""
+                        target_method(alert)
                     
                     self.notification_manager.notify_signal_completed(signal)
                 
@@ -1396,11 +1953,22 @@ class NSETrendScanner:
             self.telegram_bot.start_background()
             logger.info("Telegram bot handler started")
         
-        # Run startup scan immediately
-        self._run_startup_scan()
+        # Setup dual-mode scheduler
+        # Continuous mode: every 15 minutes - monitoring only
+        # Signal generation mode: 3:00 PM - generate new signals
+        
+        scan_interval = self.settings.get('scanner', {}).get('scan_interval_minutes', 15)
+        
+        # Add continuous monitoring job (every 15 min)
+        self.scheduler.add_continuous_job(self.run_continuous_monitoring, 'continuous_monitor')
+        
+        # Add signal generation job (3:00 PM daily)
+        self.scheduler.add_signal_generation_job(self.run_signal_generation, 'signal_generator')
         
         # Start scheduler
         self.scheduler.start()
+        
+        logger.info(f"Scheduler started - Continuous monitor: every {scan_interval}min, Signal gen: {self.daily_signal_hour}:00 IST")
         
         # Keep main thread alive
         try:

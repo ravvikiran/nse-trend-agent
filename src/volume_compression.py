@@ -384,9 +384,17 @@ def generate_signal(
     # Calculate stop loss (below compression base)
     stop_loss = compression_low
     
-    # Calculate targets (measured move)
-    target_1 = compression_high + (range_height * 1)
-    target_2 = compression_high + (range_height * 2)
+    # Enforce 2-3% SL band
+    sl_pct = (entry_min - stop_loss) / entry_min * 100
+    if sl_pct < 2:
+        stop_loss = entry_min * 0.98
+    elif sl_pct > 3:
+        stop_loss = entry_min * 0.97
+    
+    # Recalculate targets based on new SL
+    risk = entry_min - stop_loss
+    target_1 = entry_min + (risk * 2)
+    target_2 = entry_min + (risk * 3)
     
     signal = VERCSignal(
         stock_symbol=stock_symbol,

@@ -306,9 +306,30 @@ class AlertService:
             message += f"*Alerted Stocks:*\n"
             for stock in alerted_stocks[:10]:  # Show max 10
                 message += f"  • {stock}\n"
-            
-            if len(alerted_stocks) > 10:
-                message += f"  • ... and {len(alerted_stocks) - 10} more"
+        
+        return self.send_message(message)
+    
+    def send_no_signal_message(self) -> bool:
+        """
+        Send a 'No Signal Today' message when no valid signals are found.
+        
+        Returns:
+            True if message sent successfully
+        """
+        from datetime import datetime
+        import pytz
+        
+        ist = pytz.timezone('Asia/Kolkata')
+        now = datetime.now(ist)
+        
+        message = f"""📊 DAILY SCAN UPDATE
+
+❌ No high-quality signals found today.
+
+System Status: ✅ Running
+Market Condition: Possibly sideways / low momentum
+
+⏰ Next scan: Tomorrow 3:00 PM IST"""
         
         return self.send_message(message)
 

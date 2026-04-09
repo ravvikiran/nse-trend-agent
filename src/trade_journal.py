@@ -251,8 +251,26 @@ class TradeJournal:
                 return True
         return False
     
-    def get_open_trades(self) -> List[Dict[str, Any]]:
+    def get_active_trades(self) -> List[Dict[str, Any]]:
+        """Get all active (open) trades."""
         return [t for t in self.trades if t.get('outcome') == self.OUTCOME_OPEN]
+    
+    def get_all_symbols(self) -> set:
+        """Get all unique symbols from the journal (for deduplication)."""
+        symbols = set()
+        for trade in self.trades:
+            symbols.add(trade.get('symbol', '').upper())
+        return symbols
+    
+    def update_trade_field(self, trade_id: str, field: str, value: Any) -> bool:
+        """Update a specific field in a trade."""
+        for trade in self.trades:
+            if trade.get('trade_id') == trade_id:
+                trade[field] = value
+                trade['updated_at'] = datetime.now().isoformat()
+                self._save_trades()
+                return True
+        return False
     
     def get_closed_trades(self, limit: int = 100) -> List[Dict[str, Any]]:
         closed = [t for t in self.trades if t.get('outcome') != self.OUTCOME_OPEN]

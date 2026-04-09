@@ -69,5 +69,20 @@
     "data": {
         "storage_dir": "data",
         "max_history_signals": 1000
+    },
+    "signal_mode": {
+        "daily_signal_hour": 15,
+        "max_signals_per_day": 3,
+        "confidence_threshold": 7,
+        "deduplication_days": 5
+    },
+    "trade_filters": {
+        "min_rr": 2.0,
+        "min_target1_pct": 5.0,
+        "max_target1_pct": 10.0,
+        "min_sl_pct": 2.0,
+        "max_sl_pct": 3.0,
+        "min_breakout_strength": 2.0,
+        "min_volume_ratio": 1.3
     }
 }
