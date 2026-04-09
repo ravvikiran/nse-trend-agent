@@ -47,6 +47,7 @@ class StrategyPerformanceTracker:
     FILTER_FLOORS = {
         'volume_ratio_min': 1.5,
         'rsi_max': 50,
+        'atr_min': 0.1,
         'breakout_strength_min': 0.0
     }
     
@@ -87,6 +88,9 @@ class StrategyPerformanceTracker:
         }
         
         self._current_market_condition = 'TRENDING'
+        
+        self._load_weights()
+        self._load_filters()
         
         logger.info("StrategyPerformanceTracker initialized")
     
@@ -287,12 +291,12 @@ class StrategyPerformanceTracker:
         for strategy in ['TREND', 'VERC', 'MTF']:
             stats = self.get_strategy_stats(strategy)
             trade_count = stats.get('trades', 0)
+            score = stats.get('weighted_score', self._calculate_performance_score(stats))
             
-            if trade_count < self.min_trades:
+            if trade_count < self.min_trades or score < self.score_threshold:
                 continue
             
             current_weight = self.strategy_weights.get(strategy, 0.5)
-            score = stats.get('weighted_score', self._calculate_performance_score(stats))
             
             context_key = (strategy, self._current_market_condition)
             adjustment = self._calculate_proportional_adjustment(stats, context_key)
@@ -329,6 +333,11 @@ class StrategyPerformanceTracker:
                     self.weight_history[strategy] = self.weight_history[strategy][-20:]
             
             self.strategy_weights[strategy] = new_weight
+        
+        total = sum(self.strategy_weights.values())
+        if total > 0:
+            for k in self.strategy_weights:
+                self.strategy_weights[k] /= total
         
         if changes:
             self._save_weights()
@@ -405,7 +414,7 @@ class StrategyPerformanceTracker:
             if 'late_entries' in issue or 'overbought' in issue:
                 current = self.adaptive_filters['rsi_max']
                 new_value = max(
-                    self.FILTER_CAPS['rsi_max'],
+                    self.FILTER_FLOORS['rsi_max'],
                     current - 5
                 )
                 if new_value != current:
@@ -425,7 +434,7 @@ class StrategyPerformanceTracker:
             if 'dead_stock' in issue or 'low_volatility' in issue:
                 current = self.adaptive_filters['atr_min']
                 new_value = max(
-                    self.FILTER_CAPS['atr_min'],
+                    self.FILTER_FLOORS.get('atr_min', 0.1),
                     current - 0.1
                 )
                 if new_value != current:
@@ -468,7 +477,7 @@ class StrategyPerformanceTracker:
             if '60-65' in rsi_info or '65-70' in rsi_info:
                 current = self.adaptive_filters['rsi_max']
                 new_value = max(
-                    self.FILTER_CAPS['rsi_max'],
+                    self.FILTER_FLOORS['rsi_max'],
                     current - 5
                 )
                 if new_value != current:
@@ -534,10 +543,10 @@ class StrategyPerformanceTracker:
         if volume_ratio < self.adaptive_filters.get('volume_ratio_min', 1.5):
             reasons.append(f"Volume ratio below threshold ({volume_ratio:.2f} < {self.adaptive_filters.get('volume_ratio_min', 1.5)})")
         
-        breakout_pct = breakout_strength * 100 if breakout_strength <= 1 else breakout_strength
-        breakout_min = self.adaptive_filters.get('breakout_strength_min', 0.0) * 100
-        if breakout_pct < breakout_min:
-            reasons.append(f"Breakout strength below threshold ({breakout_pct:.1f}% < {breakout_min:.1f}%)")
+        breakout_value = breakout_strength if breakout_strength > 1 else breakout_strength * 100
+        breakout_min = self.adaptive_filters.get('breakout_strength_min', 0.0)
+        if breakout_min > 0 and breakout_value < breakout_min:
+            reasons.append(f"Breakout strength below threshold ({breakout_value:.1f}% < {breakout_min:.1f}%)")
         
         return {
             'passed': len(reasons) == 0,
@@ -574,6 +583,19 @@ class StrategyPerformanceTracker:
                     logger.info(f"Loaded weights from {filepath}")
         except Exception as e:
             logger.error(f"Error loading weights: {e}")
+    
+    def _load_filters(self) -> None:
+        """Load adaptive filters from file."""
+        filepath = os.path.join(self.data_dir, 'adaptive_filters.json')
+        try:
+            if os.path.exists(filepath):
+                with open(filepath, 'r') as f:
+                    data = json.load(f)
+                    if 'filters' in data:
+                        self.adaptive_filters.update(data['filters'])
+                    logger.info(f"Loaded filters from {filepath}")
+        except Exception as e:
+            logger.error(f"Error loading filters: {e}")
     
     def update_context_weight(self, strategy: str, market_condition: str, weight: float) -> None:
         """Update context-specific weight for a strategy."""
@@ -665,17 +687,6 @@ class StrategyPerformanceTracker:
                 'score_threshold': self.score_threshold
             }
         }
-
-
-    def evaluate(self) -> Dict[str, Any]:
-        """
-        Evaluate trade journal and auto-optimize.
-        Alias for auto_optimize() to provide cleaner API.
-        
-        - If win_rate < 40%: decrease strategy weight, increase filter strictness
-        - If win_rate > 60%: increase strategy weight, relax filters
-        """
-        return self.auto_optimize()
 
 
 def create_strategy_performance_tracker(trade_journal) -> StrategyPerformanceTracker:

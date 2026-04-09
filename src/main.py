@@ -166,8 +166,18 @@ class NSETrendScanner:
         # Sync memory with history manager
         self.signal_memory.sync_with_history_manager(self.history_manager)
         
+        # ==================== Trade Journal & Performance ====================
+        self.strategy_optimizer = create_strategy_performance_tracker(self.trade_journal)
+        
+        self.ai_learning_layer = create_ai_learning_layer(
+            self.trade_journal, 
+            self.strategy_optimizer,
+            self.ai_analyzer
+        )
+        
         # ==================== NEW: AI-Driven Rules Engine ====================
-        self.ai_rules_engine = create_ai_rules_engine(self.ai_analyzer)
+        # Pass learning_layer for feedback loop (learning → filters → signals)
+        self.ai_rules_engine = create_ai_rules_engine(self.ai_analyzer, self.ai_learning_layer)
         
         # ==================== MTF Strategy Scanner ====================
         # Multi-timeframe strategy (Trend + Pullback + Confirmation)
@@ -701,6 +711,7 @@ Loss: -{loss_pct:.1f}%
         self.trade_journal.log_signal(
             symbol=ticker,
             strategy=strategy,
+            direction="BUY",
             entry=entry,
             stop_loss=stop_loss,
             targets=[t1, t2, t3],
@@ -1376,6 +1387,7 @@ Loss: -{loss_pct:.1f}%
                 trade_id = self.trade_journal.log_signal(
                     ticker,
                     strategy_type,
+                    "BUY",
                     entry,
                     stop_loss,
                     targets,
@@ -1816,6 +1828,7 @@ Loss: -{loss_pct:.1f}%"""
             self.trade_journal.log_signal(
                 symbol=signal.ticker,
                 strategy='TREND',
+                direction="BUY",
                 entry=entry,
                 stop_loss=stop_loss,
                 targets=targets,
@@ -1876,6 +1889,7 @@ Loss: -{loss_pct:.1f}%"""
             self.trade_journal.log_signal(
                 symbol=signal.stock_symbol,
                 strategy='VERC',
+                direction="BUY",
                 entry=entry,
                 stop_loss=stop_loss,
                 targets=targets,
