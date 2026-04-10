@@ -205,11 +205,14 @@ class NSETrendScanner:
         # ==================== Signal Mode Configuration ====================
         signal_mode = self.settings.get('signal_mode', {})
         self.daily_signal_hour = signal_mode.get('daily_signal_hour', 15)
-        self.max_signals_per_day = signal_mode.get('max_signals_per_day', 3)
+        self.max_signals_per_day = signal_mode.get('max_signals_per_day', 5)
         self.confidence_threshold = signal_mode.get('confidence_threshold', 7)
         self.deduplication_days = signal_mode.get('deduplication_days', 5)
         self._signals_sent_today = 0
         self._last_signal_date = None
+        
+        # Top 5 candidates queue (maintained throughout the day until 3 PM)
+        self._top5_candidates = []  # List of signals found during periodic scans
         
         # Signal tracking interval (check every N scans)
         self.signal_check_interval = self.settings.get('learning', {}).get('signal_tracking', {}).get('check_interval_scans', 4)
@@ -499,11 +502,8 @@ Loss: -{loss_pct:.1f}%
     def run_signal_generation(self):
         """
         SIGNAL GENERATION MODE - 3:00 PM only
-        Generates new trading signals with:
-        - All filters applied
-        - Max 3 signals per day
-        - Confidence threshold filtering
-        - Deduplication via trade journal and signal_memory
+        Sends signals from top 5 candidates found throughout the day.
+        If no candidates, runs fresh scan and sends top signals.
         """
         from datetime import datetime
         
@@ -514,101 +514,16 @@ Loss: -{loss_pct:.1f}%
         if self._last_signal_date != today:
             self._signals_sent_today = 0
             self._last_signal_date = today
+            self._top5_candidates = []  # Reset for new day
         
         logger.info(f"Running signal generation - Signals today: {self._signals_sent_today}/{self.max_signals_per_day}")
+        logger.info(f"Top 5 candidates from periodic scans: {len(self._top5_candidates)}")
         
-        try:
-            stocks_data = self.data_fetcher.fetch_multiple_stocks(self.stocks)
-            if not stocks_data:
-                self._send_no_signals_message()
-                return
-            
-            all_signals = []
-            
-            from trade_journal import TradeJournal
-            
-            if self.strategy in ['trend', 'all']:
-                trend_signals = self._get_trend_signals(stocks_data)
-                for signal in trend_signals:
-                    signal.strategy_type = 'TREND'
-                    signal.strategy_score = signal.trend_score if hasattr(signal, 'trend_score') else 0
-                    signal.volume_ratio = signal.indicators.get('volume_ratio', 0)
-                    signal.breakout_strength = self._calculate_breakout_strength(signal.indicators)
-                    
-                    is_valid, reason = self.trade_validator.validate_with_indicators(signal)
-                    if not is_valid:
-                        logger.info(f"Signal {signal.ticker} rejected by trade validator: {reason}")
-                        continue
-                    
-                    df = stocks_data.get(signal.ticker)
-                    
-                    if not is_tight_consolidation(df):
-                        logger.info(f"❌ Rejected {signal.ticker}: No tight consolidation")
-                        continue
-                    
-                    if not is_strong_breakout(df):
-                        logger.info(f"❌ Rejected {signal.ticker}: Weak breakout")
-                        continue
-                    
-                    breakout_type = is_valid_breakout(df)
-                    if breakout_type is None or breakout_type != 'BUY':
-                        logger.info(f"❌ Rejected {signal.ticker}: No valid breakout")
-                        continue
-                    
-                    signal.base_rank_score = self._calculate_base_rank_score(signal)
-                    signal.rank_score = signal.base_rank_score
-                    signal.market_context = self.market_context_engine.get_context()
-                    signal.quality = TradeJournal.calculate_quality(
-                        signal.strategy_score,
-                        signal.volume_ratio,
-                        signal.breakout_strength
-                    )
-                    signal.final_score = self._calculate_final_score(signal)
-                    all_signals.append(signal)
-            
-            if self.strategy in ['verc', 'all']:
-                verc_signals = self._get_verc_signals(stocks_data)
-                for signal in verc_signals:
-                    signal.strategy_type = 'VERC'
-                    signal.strategy_score = signal.confidence_score if hasattr(signal, 'confidence_score') else 0
-                    signal.volume_ratio = signal.relative_volume if hasattr(signal, 'relative_volume') else 0
-                    signal.breakout_strength = 0
-                    
-                    is_valid, reason = self.trade_validator.validate_with_indicators(signal)
-                    if not is_valid:
-                        logger.info(f"Signal {signal.stock_symbol} rejected by trade validator: {reason}")
-                        continue
-                    
-                    df = stocks_data.get(signal.stock_symbol)
-                    
-                    if not is_tight_consolidation(df):
-                        logger.info(f"❌ Rejected {signal.stock_symbol}: No tight consolidation")
-                        continue
-                    
-                    if not is_strong_breakout(df):
-                        logger.info(f"❌ Rejected {signal.stock_symbol}: Weak breakout")
-                        continue
-                    
-                    breakout_type = is_valid_breakout(df)
-                    if breakout_type is None or breakout_type != 'BUY':
-                        logger.info(f"❌ Rejected {signal.stock_symbol}: No valid breakout")
-                        continue
-                    
-                    signal.base_rank_score = self._calculate_base_rank_score(signal)
-                    signal.rank_score = signal.base_rank_score
-                    signal.market_context = self.market_context_engine.get_context()
-                    signal.quality = TradeJournal.calculate_quality(
-                        signal.strategy_score,
-                        signal.volume_ratio,
-                        0
-                    )
-                    signal.final_score = self._calculate_final_score(signal)
-                    all_signals.append(signal)
-            
-            all_signals.sort(key=lambda x: getattr(x, 'final_score', 0), reverse=True)
-            
-            filtered_signals = []
-            for signal in all_signals:
+        signals_to_send = []
+        
+        if self._top5_candidates:
+            logger.info("Using signals from top 5 candidates pool")
+            for signal in self._top5_candidates:
                 if self._signals_sent_today >= self.max_signals_per_day:
                     break
                 
@@ -627,24 +542,127 @@ Loss: -{loss_pct:.1f}%
                     logger.info(f"Skipping {ticker}: confidence {confidence} < threshold {self.confidence_threshold}")
                     continue
                 
-                filtered_signals.append(signal)
-            
-            filtered_signals = filtered_signals[:self.max_signals_per_day]
-            
-            if not filtered_signals:
-                self._send_no_signals_message()
-                return
-            
-            target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
-            
-            for signal in filtered_signals:
-                self._send_new_signal_alert(signal, target_method)
+                signals_to_send.append(signal)
                 self._signals_sent_today += 1
-            
-            logger.info(f"Signal generation complete - Sent {len(filtered_signals)} signals")
-            
-        except Exception as e:
-            logger.error(f"Error in signal generation: {e}")
+        else:
+            logger.info("No candidates in pool, running fresh scan")
+            try:
+                stocks_data = self.data_fetcher.fetch_multiple_stocks(self.stocks)
+                if not stocks_data:
+                    self._send_no_signals_message()
+                    return
+                
+                all_signals = []
+                
+                from trade_journal import TradeJournal
+                
+                if self.strategy in ['trend', 'all']:
+                    trend_signals = self._get_trend_signals(stocks_data)
+                    for signal in trend_signals:
+                        signal.strategy_type = 'TREND'
+                        signal.strategy_score = signal.trend_score if hasattr(signal, 'trend_score') else 0
+                        signal.volume_ratio = signal.indicators.get('volume_ratio', 0)
+                        signal.breakout_strength = self._calculate_breakout_strength(signal.indicators)
+                        
+                        is_valid, reason = self.trade_validator.validate_with_indicators(signal)
+                        if not is_valid:
+                            continue
+                        
+                        df = stocks_data.get(signal.ticker)
+                        
+                        if not is_tight_consolidation(df):
+                            continue
+                        
+                        if not is_strong_breakout(df):
+                            continue
+                        
+                        breakout_type = is_valid_breakout(df)
+                        if breakout_type is None or breakout_type != 'BUY':
+                            continue
+                        
+                        signal.base_rank_score = self._calculate_base_rank_score(signal)
+                        signal.rank_score = signal.base_rank_score
+                        signal.market_context = self.market_context_engine.get_context()
+                        signal.quality = TradeJournal.calculate_quality(
+                            signal.strategy_score,
+                            signal.volume_ratio,
+                            signal.breakout_strength
+                        )
+                        signal.final_score = self._calculate_final_score(signal)
+                        all_signals.append(signal)
+                
+                if self.strategy in ['verc', 'all']:
+                    verc_signals = self._get_verc_signals(stocks_data)
+                    for signal in verc_signals:
+                        signal.strategy_type = 'VERC'
+                        signal.strategy_score = signal.confidence_score if hasattr(signal, 'confidence_score') else 0
+                        signal.volume_ratio = signal.relative_volume if hasattr(signal, 'relative_volume') else 0
+                        signal.breakout_strength = 0
+                        
+                        is_valid, reason = self.trade_validator.validate_with_indicators(signal)
+                        if not is_valid:
+                            continue
+                        
+                        df = stocks_data.get(signal.stock_symbol)
+                        
+                        if not is_tight_consolidation(df):
+                            continue
+                        
+                        if not is_strong_breakout(df):
+                            continue
+                        
+                        breakout_type = is_valid_breakout(df)
+                        if breakout_type is None or breakout_type != 'BUY':
+                            continue
+                        
+                        signal.base_rank_score = self._calculate_base_rank_score(signal)
+                        signal.rank_score = signal.base_rank_score
+                        signal.market_context = self.market_context_engine.get_context()
+                        signal.quality = TradeJournal.calculate_quality(
+                            signal.strategy_score,
+                            signal.volume_ratio,
+                            0
+                        )
+                        signal.final_score = self._calculate_final_score(signal)
+                        all_signals.append(signal)
+                
+                all_signals.sort(key=lambda x: getattr(x, 'final_score', 0), reverse=True)
+                
+                for signal in all_signals:
+                    if self._signals_sent_today >= self.max_signals_per_day:
+                        break
+                    
+                    ticker = signal.ticker if hasattr(signal, 'ticker') else signal.stock_symbol
+                    
+                    if self.trade_journal.check_signal_exists(ticker, signal.strategy_type):
+                        continue
+                    
+                    if self.signal_memory.is_duplicate(ticker):
+                        continue
+                    
+                    confidence = getattr(signal, 'final_score', 0)
+                    if confidence < self.confidence_threshold:
+                        continue
+                    
+                    signals_to_send.append(signal)
+                    self._signals_sent_today += 1
+                    
+            except Exception as e:
+                logger.error(f"Error in signal generation fresh scan: {e}")
+        
+        if not signals_to_send:
+            self._send_no_signals_message()
+            return
+        
+        target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
+        
+        for signal in signals_to_send:
+            self._send_new_signal_alert(signal, target_method)
+        
+        # Clear candidates after sending
+        self._top5_candidates = []
+        
+        logger.info(f"Signal generation complete - Sent {len(signals_to_send)} signals")
     
     def _calculate_final_score(self, signal) -> float:
         """Calculate final score with all factors."""
@@ -1962,21 +1980,27 @@ Loss: -{loss_pct:.1f}%"""
         max_signals = self.settings.get('scanner', {}).get('max_signals_per_strategy', 2) * 2
         logger.info(f"NSE Trend Scanner started - Strategy: {self.strategy}, Stocks: {len(self.stocks)}, Max Signals: {max_signals}, Active Signals: {active_signals}")
         
+        # Run initial startup scan to send notifications based on rules
+        self._run_startup_notification_scan()
+        
         # Start Telegram bot handler for two-way communication (bot handles its own messages)
         if self.telegram_bot:
             self.telegram_bot.start_background()
             logger.info("Telegram bot handler started")
         
         # Setup dual-mode scheduler
-        # Continuous mode: every 15 minutes - monitoring only
-        # Signal generation mode: 3:00 PM - generate new signals
+        # Continuous mode: every 15 minutes - monitoring only + scanning for new signals
+        # Signal generation mode: 3:00 PM - send top 5 signals as alerts
         
         scan_interval = self.settings.get('scanner', {}).get('scan_interval_minutes', 15)
         
-        # Add continuous monitoring job (every 15 min)
+        # Add continuous monitoring job (every 15 min - monitors active trades)
         self.scheduler.add_continuous_job(self.run_continuous_monitoring, 'continuous_monitor')
         
-        # Add signal generation job (3:00 PM daily)
+        # Add periodic scanning job (every 15 min - scans for new signals, stores them)
+        self.scheduler.add_continuous_job(self._run_periodic_scan, 'periodic_scan')
+        
+        # Add signal generation job (3:00 PM daily - sends top 5 signals)
         self.scheduler.add_signal_generation_job(self.run_signal_generation, 'signal_generator')
         
         # Start scheduler
@@ -1992,6 +2016,315 @@ Loss: -{loss_pct:.1f}%"""
                 status = self.scheduler.get_status()
         except KeyboardInterrupt:
             self.stop()
+    
+    def _run_startup_notification_scan(self):
+        """
+        Run startup scan to send notifications based on rules.
+        Runs immediately when app is turned on.
+        - Runs scans using all strategies with rules from ai_rules_engine
+        - If signals satisfy criteria, sends them as alerts
+        - If no signals satisfy criteria, sends 'no signals yet' alert
+        """
+        import pytz
+        
+        ist = pytz.timezone('Asia/Kolkata')
+        current_time = datetime.now(ist)
+        
+        logger.info("Running startup notification scan...")
+        
+        try:
+            stocks_data = self.data_fetcher.fetch_multiple_stocks(self.stocks)
+            if not stocks_data:
+                self._send_startup_no_signals_message("No data fetched from server")
+                return
+            
+            all_signals = []
+            
+            from trade_journal import TradeJournal
+            
+            if self.strategy in ['trend', 'all']:
+                trend_signals = self._get_trend_signals(stocks_data)
+                for signal in trend_signals:
+                    signal.strategy_type = 'TREND'
+                    signal.strategy_score = signal.trend_score if hasattr(signal, 'trend_score') else 0
+                    signal.volume_ratio = signal.indicators.get('volume_ratio', 0)
+                    signal.breakout_strength = self._calculate_breakout_strength(signal.indicators)
+                    
+                    is_valid, reason = self.trade_validator.validate_with_indicators(signal)
+                    if not is_valid:
+                        logger.info(f"Signal {signal.ticker} rejected by trade validator: {reason}")
+                        continue
+                    
+                    df = stocks_data.get(signal.ticker)
+                    
+                    if not is_tight_consolidation(df):
+                        logger.info(f"❌ Rejected {signal.ticker}: No tight consolidation")
+                        continue
+                    
+                    if not is_strong_breakout(df):
+                        logger.info(f"❌ Rejected {signal.ticker}: Weak breakout")
+                        continue
+                    
+                    breakout_type = is_valid_breakout(df)
+                    if breakout_type is None or breakout_type != 'BUY':
+                        logger.info(f"❌ Rejected {signal.ticker}: No valid breakout")
+                        continue
+                    
+                    signal.base_rank_score = self._calculate_base_rank_score(signal)
+                    signal.rank_score = signal.base_rank_score
+                    signal.market_context = self.market_context_engine.get_context()
+                    signal.quality = TradeJournal.calculate_quality(
+                        signal.strategy_score,
+                        signal.volume_ratio,
+                        signal.breakout_strength
+                    )
+                    signal.final_score = self._calculate_final_score(signal)
+                    all_signals.append(signal)
+            
+            if self.strategy in ['verc', 'all']:
+                verc_signals = self._get_verc_signals(stocks_data)
+                for signal in verc_signals:
+                    signal.strategy_type = 'VERC'
+                    signal.strategy_score = signal.confidence_score if hasattr(signal, 'confidence_score') else 0
+                    signal.volume_ratio = signal.relative_volume if hasattr(signal, 'relative_volume') else 0
+                    signal.breakout_strength = 0
+                    
+                    is_valid, reason = self.trade_validator.validate_with_indicators(signal)
+                    if not is_valid:
+                        logger.info(f"Signal {signal.stock_symbol} rejected by trade validator: {reason}")
+                        continue
+                    
+                    df = stocks_data.get(signal.stock_symbol)
+                    
+                    if not is_tight_consolidation(df):
+                        logger.info(f"❌ Rejected {signal.stock_symbol}: No tight consolidation")
+                        continue
+                    
+                    if not is_strong_breakout(df):
+                        logger.info(f"❌ Rejected {signal.stock_symbol}: Weak breakout")
+                        continue
+                    
+                    breakout_type = is_valid_breakout(df)
+                    if breakout_type is None or breakout_type != 'BUY':
+                        logger.info(f"❌ Rejected {signal.stock_symbol}: No valid breakout")
+                        continue
+                    
+                    signal.base_rank_score = self._calculate_base_rank_score(signal)
+                    signal.rank_score = signal.base_rank_score
+                    signal.market_context = self.market_context_engine.get_context()
+                    signal.quality = TradeJournal.calculate_quality(
+                        signal.strategy_score,
+                        signal.volume_ratio,
+                        0
+                    )
+                    signal.final_score = self._calculate_final_score(signal)
+                    all_signals.append(signal)
+            
+            all_signals.sort(key=lambda x: getattr(x, 'final_score', 0), reverse=True)
+            
+            filtered_signals = []
+            for signal in all_signals:
+                if self._signals_sent_today >= self.max_signals_per_day:
+                    break
+                
+                ticker = signal.ticker if hasattr(signal, 'ticker') else signal.stock_symbol
+                
+                if self.trade_journal.check_signal_exists(ticker, signal.strategy_type):
+                    logger.info(f"Skipping {ticker}: already exists in trade journal")
+                    continue
+                
+                confidence = getattr(signal, 'final_score', 0)
+                if confidence < self.confidence_threshold:
+                    logger.info(f"Skipping {ticker}: confidence {confidence} < threshold {self.confidence_threshold}")
+                    continue
+                
+                filtered_signals.append(signal)
+            
+            filtered_signals = filtered_signals[:self.max_signals_per_day]
+            
+            if not filtered_signals:
+                self._send_startup_no_signals_message("No signals met criteria on startup scan")
+                return
+            
+            target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
+            
+            for signal in filtered_signals:
+                self._send_new_signal_alert(signal, target_method)
+                self._signals_sent_today += 1
+            
+            logger.info(f"Startup scan complete - Sent {len(filtered_signals)} signals")
+            
+        except Exception as e:
+            logger.error(f"Error in startup notification scan: {e}")
+            self._send_startup_no_signals_message(f"Error during scan: {str(e)}")
+    
+    def _send_startup_no_signals_message(self, reason: str = ""):
+        """Send 'no signals yet' message on startup when no signals satisfy criteria."""
+        import pytz
+        
+        ist = pytz.timezone('Asia/Kolkata')
+        now = datetime.now(ist)
+        
+        message = f"""📊 Startup Scan Complete
+Time: {now.strftime('%Y-%m-%d %H:%M')} IST
+
+⚠️ No signals yet.
+
+Reason: {reason}
+
+The scanner will continue monitoring and will send signals when criteria are met.
+Next scan in 15 minutes."""
+        
+        target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
+        target_method(message)
+        logger.info(f"Startup no signals alert sent: {reason}")
+    
+    def _run_periodic_scan(self):
+        """
+        Run periodic scan every 15 minutes.
+        Scans for signals that satisfy criteria and stores them in pending queue.
+        Does NOT send alerts immediately - only sends at 3 PM.
+        """
+        import pytz
+        
+        ist = pytz.timezone('Asia/Kolkata')
+        now = datetime.now(ist)
+        
+        logger.info("Running periodic scan (15 min interval)...")
+        
+        try:
+            stocks_data = self.data_fetcher.fetch_multiple_stocks(self.stocks)
+            if not stocks_data:
+                logger.warning("No data fetched in periodic scan")
+                return
+            
+            all_signals = []
+            
+            from trade_journal import TradeJournal
+            
+            if self.strategy in ['trend', 'all']:
+                trend_signals = self._get_trend_signals(stocks_data)
+                for signal in trend_signals:
+                    signal.strategy_type = 'TREND'
+                    signal.strategy_score = signal.trend_score if hasattr(signal, 'trend_score') else 0
+                    signal.volume_ratio = signal.indicators.get('volume_ratio', 0)
+                    signal.breakout_strength = self._calculate_breakout_strength(signal.indicators)
+                    
+                    is_valid, reason = self.trade_validator.validate_with_indicators(signal)
+                    if not is_valid:
+                        continue
+                    
+                    df = stocks_data.get(signal.ticker)
+                    
+                    if not is_tight_consolidation(df):
+                        continue
+                    
+                    if not is_strong_breakout(df):
+                        continue
+                    
+                    breakout_type = is_valid_breakout(df)
+                    if breakout_type is None or breakout_type != 'BUY':
+                        continue
+                    
+                    signal.base_rank_score = self._calculate_base_rank_score(signal)
+                    signal.rank_score = signal.base_rank_score
+                    signal.market_context = self.market_context_engine.get_context()
+                    signal.quality = TradeJournal.calculate_quality(
+                        signal.strategy_score,
+                        signal.volume_ratio,
+                        signal.breakout_strength
+                    )
+                    signal.final_score = self._calculate_final_score(signal)
+                    all_signals.append(signal)
+            
+            if self.strategy in ['verc', 'all']:
+                verc_signals = self._get_verc_signals(stocks_data)
+                for signal in verc_signals:
+                    signal.strategy_type = 'VERC'
+                    signal.strategy_score = signal.confidence_score if hasattr(signal, 'confidence_score') else 0
+                    signal.volume_ratio = signal.relative_volume if hasattr(signal, 'relative_volume') else 0
+                    signal.breakout_strength = 0
+                    
+                    is_valid, reason = self.trade_validator.validate_with_indicators(signal)
+                    if not is_valid:
+                        continue
+                    
+                    df = stocks_data.get(signal.stock_symbol)
+                    
+                    if not is_tight_consolidation(df):
+                        continue
+                    
+                    if not is_strong_breakout(df):
+                        continue
+                    
+                    breakout_type = is_valid_breakout(df)
+                    if breakout_type is None or breakout_type != 'BUY':
+                        continue
+                    
+                    signal.base_rank_score = self._calculate_base_rank_score(signal)
+                    signal.rank_score = signal.base_rank_score
+                    signal.market_context = self.market_context_engine.get_context()
+                    signal.quality = TradeJournal.calculate_quality(
+                        signal.strategy_score,
+                        signal.volume_ratio,
+                        0
+                    )
+                    signal.final_score = self._calculate_final_score(signal)
+                    all_signals.append(signal)
+            
+            all_signals.sort(key=lambda x: getattr(x, 'final_score', 0), reverse=True)
+            
+            filtered_signals = []
+            for signal in all_signals:
+                ticker = signal.ticker if hasattr(signal, 'ticker') else signal.stock_symbol
+                
+                if self.trade_journal.check_signal_exists(ticker, signal.strategy_type):
+                    continue
+                
+                confidence = getattr(signal, 'final_score', 0)
+                if confidence < self.confidence_threshold:
+                    continue
+                
+                filtered_signals.append(signal)
+            
+            self._update_top5_candidates(filtered_signals)
+            logger.info(f"Periodic scan found {len(filtered_signals)} signals meeting criteria. Top 5 candidates: {len(self._top5_candidates)}")
+            
+        except Exception as e:
+            logger.error(f"Error in periodic scan: {e}")
+    
+    def _update_top5_candidates(self, new_signals: list):
+        """
+        Update the top 5 candidates list.
+        - Add new signals to the pool
+        - Sort by score and keep only top 5
+        - Remove duplicates (keep highest scoring entry per symbol)
+        """
+        if not new_signals:
+            return
+        
+        for signal in new_signals:
+            ticker = signal.ticker if hasattr(signal, 'ticker') else signal.stock_symbol
+            signal_key = f"{signal.strategy_type}:{ticker}"
+            
+            existing_idx = None
+            for i, s in enumerate(self._top5_candidates):
+                s_ticker = s.ticker if hasattr(s, 'ticker') else s.stock_symbol
+                s_key = f"{s.strategy_type}:{s_ticker}"
+                if s_key == signal_key:
+                    existing_idx = i
+                    break
+            
+            if existing_idx is not None:
+                old_score = getattr(self._top5_candidates[existing_idx], 'final_score', 0)
+                new_score = getattr(signal, 'final_score', 0)
+                if new_score > old_score:
+                    self._top5_candidates[existing_idx] = signal
+            else:
+                self._top5_candidates.append(signal)
+        
+        self._top5_candidates.sort(key=lambda x: getattr(x, 'final_score', 0), reverse=True)
+        self._top5_candidates = self._top5_candidates[:5]
     
     def stop(self):
         """Stop the scanner."""
