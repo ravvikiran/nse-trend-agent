@@ -2035,7 +2035,7 @@ Loss: -{loss_pct:.1f}%"""
         try:
             stocks_data = self.data_fetcher.fetch_multiple_stocks(self.stocks)
             if not stocks_data:
-                self._send_startup_no_signals_message("No data fetched from server")
+                logger.warning("Startup scan - No data fetched from server")
                 return
             
             all_signals = []
@@ -2143,7 +2143,7 @@ Loss: -{loss_pct:.1f}%"""
             filtered_signals = filtered_signals[:self.max_signals_per_day]
             
             if not filtered_signals:
-                self._send_startup_no_signals_message("No signals met criteria on startup scan")
+                logger.info("Startup scan complete - No signals met criteria")
                 return
             
             target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
@@ -2156,7 +2156,6 @@ Loss: -{loss_pct:.1f}%"""
             
         except Exception as e:
             logger.error(f"Error in startup notification scan: {e}")
-            self._send_startup_no_signals_message(f"Error during scan: {str(e)}")
     
     def _send_startup_no_signals_message(self, reason: str = ""):
         """Send 'no signals yet' message on startup when no signals satisfy criteria."""

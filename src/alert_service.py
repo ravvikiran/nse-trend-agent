@@ -122,44 +122,30 @@ class AlertService:
         """
         ind = signal.indicators
         
-        # Format timestamp
-        if isinstance(signal.timestamp, datetime):
-            timestamp_str = signal.timestamp.strftime("%Y-%m-%d %H:%M:%S")
-        else:
-            timestamp_str = str(signal.timestamp)
+        current_price = ind.get('close', 0)
         
-        # Get EMA alignment string
-        ema_alignment = self._get_ema_alignment(ind)
+        entry_zone = current_price * 1.005
+        stop_loss = current_price * 0.98
+        target_1 = current_price * 1.061
+        target_2 = current_price * 1.122
         
-        # Calculate volume ratio
-        volume_ratio = ind.get('volume', 0) / ind.get('volume_ma', 1) if ind.get('volume_ma') else 0
+        sl_pct = ((stop_loss / current_price) - 1) * 100
+        t1_pct = ((target_1 / current_price) - 1) * 100
+        t2_pct = ((target_2 / current_price) - 1) * 100
         
-        # Build message
-        message = f"🚨 *TREND ALERT*\n\n"
-        message += f"📌 *Stock:* `{ind.get('ticker', signal.ticker)}`\n"
-        message += f"⏰ *Time:* {timestamp_str}\n"
-        message += f"📊 *Timeframe:* 1D\n\n"
-        message += f"*Signal Type:* {signal.message}\n\n"
-        message += f"*Price:* ₹{ind.get('close', 0):.2f}\n"
-        message += f"*EMA Alignment:*\n"
-        message += f"  • EMA 20: ₹{ind.get('ema_20', 0):.2f}\n"
-        message += f"  • EMA 50: ₹{ind.get('ema_50', 0):.2f}\n"
-        message += f"  • EMA 100: ₹{ind.get('ema_100', 0):.2f}\n"
-        message += f"  • EMA 200: ₹{ind.get('ema_200', 0):.2f}\n\n"
-        message += f"*Volume:*\n"
-        message += f"  • Current: {ind.get('volume', 0):,}\n"
-        message += f"  • MA 30: {ind.get('volume_ma', 0):,.0f}\n"
-        message += f"  • Ratio: {volume_ratio:.2f}x\n\n"
+        score = signal.trend_score if signal.trend_score else 0
         
-        # Add RSI if available
-        if ind.get('rsi'):
-            message += f"*RSI (14):* {ind.get('rsi', 0):.1f}\n"
-        
-        # Add MACD if available
-        if ind.get('macd'):
-            message += f"*MACD:* {ind.get('macd', 0):.4f}\n"
-        
-        message += f"\n_EMA Alignment: {ema_alignment}_"
+        message = f"Stock: {ind.get('ticker', signal.ticker)}\n\n"
+        message += f"💰 Price: ₹{current_price:.2f}\n\n"
+        message += f"🎯 Entry Zone:\n"
+        message += f"  Buy Above: ₹{entry_zone:.2f}\n\n"
+        message += f"🛡️ Stop Loss:\n"
+        message += f"  SL: ₹{stop_loss:.2f} ({sl_pct:.1f}%)\n\n"
+        message += f"🎯 Targets (RR ≥ 2:1):\n"
+        message += f"  Target 1: ₹{target_1:.2f} ({t1_pct:.1f}%)\n"
+        message += f"  Target 2: ₹{target_2:.2f} ({t2_pct:.1f}%)\n\n"
+        message += f"📊 Signal Metrics:\n"
+        message += f"  Score: {score}/10"
         
         return message
     

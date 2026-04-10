@@ -39,6 +39,10 @@ class VERCSignal:
     verc_score: int = 0
     rsi_value: float = 0.0
     breakout_strength: float = 0.0
+    rsi_accumulation: bool = False
+    range_tightening: bool = False
+    volume_spike: bool = False
+    multi_timeframe_aligned: bool = False
 
 
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
@@ -78,6 +82,139 @@ def calculate_volume_ma(df: pd.DataFrame, period: int) -> pd.Series:
         Series with MA values
     """
     return df['volume'].rolling(window=period).mean()
+
+
+def calculate_rsi(df: pd.DataFrame, period: int = 14) -> float:
+    """
+    Calculate Relative Strength Index (RSI)
+    
+    Args:
+        df: DataFrame with 'close' column
+        period: RSI period (default: 14)
+    
+    Returns:
+        RSI value (0-100)
+    """
+    if len(df) < period + 1:
+        return 50.0
+    
+    delta = df['close'].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    
+    avg_gain = gain.rolling(period).mean()
+    avg_loss = loss.rolling(period).mean()
+    
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    
+    return rsi.iloc[-1] if not pd.isna(rsi.iloc[-1]) else 50.0
+
+
+def is_rsi_accumulation(rsi: float) -> bool:
+    """
+    Check if RSI indicates strong accumulation (50-70 range)
+    
+    Args:
+        rsi: RSI value
+    
+    Returns:
+        True if in accumulation zone
+    """
+    return 50 <= rsi <= 70
+
+
+def check_tightening_range(df: pd.DataFrame, recent_period: int = 5, older_period: int = 20) -> bool:
+    """
+    Check if range is tightening over time (range shrinking)
+    
+    Args:
+        df: DataFrame with 'high', 'low' columns
+        recent_period: Recent period for range (default: 5)
+        older_period: Older period for range (default: 20)
+    
+    Returns:
+        True if range is tightening
+    """
+    if len(df) < older_period:
+        return False
+    
+    recent_range = df['high'].tail(recent_period).max() - df['low'].tail(recent_period).min()
+    older_range = df['high'].tail(older_period).max() - df['low'].tail(older_period).min()
+    
+    return recent_range < older_range
+
+
+def calculate_breakout_strength(df: pd.DataFrame, compression_high: float) -> float:
+    """
+    Calculate breakout strength as percentage
+    
+    Args:
+        df: DataFrame with 'close' column
+        compression_high: High of compression range
+    
+    Returns:
+        Breakout strength as decimal (e.g., 0.02 = 2%)
+    """
+    if compression_high <= 0:
+        return 0.0
+    
+    current_close = df['close'].iloc[-1]
+    return (current_close - compression_high) / compression_high
+
+
+def check_multi_timeframe_trend(df: pd.DataFrame, short_ema: int = 20, long_ema: int = 50) -> bool:
+    """
+    Check if price is aligned with both daily and weekly trends
+    
+    Rules:
+    - Price > EMA50 (daily)
+    - EMA20 > EMA50 (daily trend)
+    
+    Args:
+        df: DataFrame with 'close' column
+        short_ema: Short EMA period (default: 20)
+        long_ema: Long EMA period (default: 50)
+    
+    Returns:
+        True if multi-timeframe aligned
+    """
+    if len(df) < long_ema:
+        return False
+    
+    current_close = df['close'].iloc[-1]
+    
+    ema_short = df['close'].ewm(span=short_ema, adjust=False).mean().iloc[-1]
+    ema_long = df['close'].ewm(span=long_ema, adjust=False).mean().iloc[-1]
+    
+    price_above_ema50 = current_close > ema_long
+    ema_alignment = ema_short > ema_long
+    
+    return price_above_ema50 and ema_alignment
+
+
+def check_volume_spike(df: pd.DataFrame, threshold: float = 1.5, period: int = 30) -> bool:
+    """
+    Check if current volume is a spike (above threshold * volume MA)
+    
+    Args:
+        df: DataFrame with 'volume' column
+        threshold: Multiplier for volume MA (default: 1.5)
+        period: MA period (default: 30)
+    
+    Returns:
+        True if volume spike detected
+    """
+    if len(df) < period:
+        return False
+    
+    current_volume = df['volume'].iloc[-1]
+    volume_ma = calculate_volume_ma(df, period).iloc[-1]
+    
+    if volume_ma <= 0:
+        return False
+    
+    return current_volume > threshold * volume_ma
 
 
 def detect_range_compression(
@@ -176,7 +313,7 @@ def detect_volume_expansion(
 def detect_breakout(
     df: pd.DataFrame,
     compression_high: float,
-    min_breakout_volume: float = None
+    min_breakout_volume: Optional[float] = None
 ) -> Tuple[bool, float]:
     """
     Detect breakout from compression range.
@@ -249,7 +386,7 @@ def calculate_confidence_score(
     breakout_detected: bool,
     trend_aligned: bool,
     relative_volume: float,
-    range_percentage: float = None
+    range_percentage: Optional[float] = None
 ) -> Tuple[int, Dict[str, int]]:
     """
     Calculate confidence score for the signal.
@@ -363,6 +500,22 @@ def generate_signal(
     range_height = compression_high - compression_low
     range_percentage = range_height / current_price if current_price > 0 else 0
     
+    # NEW: Calculate RSI and check accumulation
+    rsi_value = calculate_rsi(df, 14)
+    rsi_accumulation = is_rsi_accumulation(rsi_value)
+    
+    # NEW: Check tightening range
+    range_tightening = check_tightening_range(df, 5, 20)
+    
+    # NEW: Calculate breakout strength
+    breakout_strength = calculate_breakout_strength(df, compression_high)
+    
+    # NEW: Check multi-timeframe trend
+    multi_timeframe_aligned = check_multi_timeframe_trend(df)
+    
+    # NEW: Check volume spike
+    volume_spike = check_volume_spike(df, 1.5, 30)
+    
     # Calculate confidence score
     confidence_score, confidence_factors = calculate_confidence_score(
         compression_detected,
@@ -413,7 +566,13 @@ def generate_signal(
         confidence_factors=confidence_factors,
         volume_ratio=volume_ma_short / calculate_volume_ma(df, volume_lookback).iloc[-1],
         relative_volume=relative_volume,
-        trend_aligned=trend_aligned
+        trend_aligned=trend_aligned,
+        rsi_value=rsi_value,
+        breakout_strength=breakout_strength,
+        rsi_accumulation=rsi_accumulation,
+        range_tightening=range_tightening,
+        volume_spike=volume_spike,
+        multi_timeframe_aligned=multi_timeframe_aligned
     )
     
     return signal
@@ -451,6 +610,16 @@ def format_alert(signal: VERCSignal) -> str:
     for factor, score in signal.confidence_factors.items():
         if score > 0:
             alert_lines.append(f"  +{factor}: {score}")
+    
+    alert_lines.extend([
+        "",
+        "Indicators:",
+        f"  RSI: {signal.rsi_value:.1f} ({'Accumulation' if signal.rsi_accumulation else 'Neutral'})",
+        f"  Range Tightening: {'Yes' if signal.range_tightening else 'No'}",
+        f"  Breakout Strength: {signal.breakout_strength*100:.2f}%",
+        f"  Multi-Timeframe: {'Aligned' if signal.multi_timeframe_aligned else 'Not Aligned'}",
+        f"  Volume Spike: {'Yes' if signal.volume_spike else 'No'}"
+    ])
     
     return "\n".join(alert_lines)
 
