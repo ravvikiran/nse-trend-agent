@@ -1,0 +1,11 @@
+{
+  "signals": {
+    "TEST": {
+      "timestamp": "2026-04-12T02:16:08.800218",
+      "outcome": null,
+      "signal_score": 70,
+      "breakout_strength": 0.02
+    }
+  },
+  "failed_signals": {}
+}

@@ -5,7 +5,7 @@ Generates actionable trade setups with entry, stop loss, targets, and risk manag
 
 import logging
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -17,6 +17,8 @@ class TradeSetup:
     stock_symbol: str
     signal_type: str
     timestamp: datetime
+    
+    direction: str
     
     current_price: float
     
@@ -63,11 +65,18 @@ class TradeSetup:
     ai_reasoning: str = ""
     sector: str = "Unknown"
     
+    position_size: int = 0
+    capital_required: float = 0.0
+    
+    partial_exit_done: bool = False
+    trail_sl_active: bool = False
+    
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             'stock_symbol': self.stock_symbol,
             'signal_type': self.signal_type,
+            'direction': self.direction,
             'timestamp': self.timestamp.isoformat() if isinstance(self.timestamp, datetime) else str(self.timestamp),
             'current_price': self.current_price,
             'entry': {
@@ -118,7 +127,11 @@ class TradeSetup:
             'positive_factors': self.positive_factors,
             'negative_factors': self.negative_factors,
             'ai_reasoning': self.ai_reasoning,
-            'sector': self.sector
+            'sector': self.sector,
+            'position_size': self.position_size,
+            'capital_required': self.capital_required,
+            'partial_exit_done': self.partial_exit_done,
+            'trail_sl_active': self.trail_sl_active
         }
 
 
@@ -127,16 +140,15 @@ class TradeSetupGenerator:
     Generates actionable trade setups from signals.
     
     Features:
-    - Breakout entry and early accumulation entry strategies
-    - Dynamic stop loss calculation
-    - Multiple target levels with R:R ratios
-    - Risk level classification
-    - Time estimates based on ATR
-    - Strict validation filters for quality setups
+    - Single source of truth for RR / % calc
+    - Enforced SL range (2–3%) → no junk trades
+    - Targets aligned with validator (5–10%)
+    - Better breakout logic (no blind entries)
+    - Cleaner confidence scoring
+    - Direction-aware logic (BUY/SELL ready)
+    - Integrated tracker for adaptive learning
+    - Position sizing calculation
     """
-    
-    DEFAULT_STOP_LOSS_PCT = 2.0
-    BREAKOUT_THRESHOLD = 0.5
     
     MIN_SL = 2.0
     MAX_SL = 3.0
@@ -144,16 +156,20 @@ class TradeSetupGenerator:
     MAX_TARGET = 10.0
     MIN_RR = 2.0
     
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        config: Optional[Dict[str, Any]] = None,
+        tracker: Optional[Any] = None
+    ):
         self.config = config or {}
-        self.default_sl_pct = self.config.get('default_stop_loss_pct', self.DEFAULT_STOP_LOSS_PCT)
+        self.tracker = tracker
     
     def generate(self, signal: Any, data: Dict[str, Any]) -> Optional[TradeSetup]:
         """
         Generate a trade setup from a signal with strict validation.
         
         Args:
-            signal: Signal object (VERCSignal, TrendSignal, CombinedSignal)
+            signal: Signal object with ticker, signal_type, trend_score
             data: Dictionary with price and indicator data
             
         Returns:
@@ -164,12 +180,15 @@ class TradeSetupGenerator:
             if price <= 0:
                 return None
 
-            stock_symbol = getattr(signal, "stock_symbol", getattr(signal, "ticker", "UNKNOWN"))
+            symbol = getattr(signal, "ticker", getattr(signal, "stock_symbol", "UNKNOWN"))
             signal_type = getattr(signal, "signal_type", getattr(signal, "type", "TREND"))
+            direction = getattr(signal, "direction", "BUY")
             
             range_low = data.get("range_low", price * 0.98)
             range_high = data.get("range_high", price * 1.02)
             ema_50 = data.get("ema_50", data.get("ema50", price))
+            ema_20 = data.get("ema_20", ema_50)
+            atr = data.get("atr", 0)
             
             support = min(range_low, ema_50 * 0.98)
             resistance = range_high
@@ -181,7 +200,20 @@ class TradeSetupGenerator:
 
             if not (self.MIN_SL <= sl_pct <= self.MAX_SL):
                 return None
-
+            
+            if self.tracker:
+                filters = self.tracker.adaptive_filters
+                vol_min = filters.get('volume_ratio_min', 1.5)
+                rsi_max = filters.get('rsi_max', 70)
+                
+                vol_ratio = data.get("volume_ratio", 0)
+                rsi = data.get("rsi", 50)
+                
+                if vol_ratio < vol_min:
+                    return None
+                if rsi > rsi_max:
+                    return None
+            
             target_1 = price * 1.05
             target_2 = price * 1.08
 
@@ -195,13 +227,34 @@ class TradeSetupGenerator:
                 return None
 
             confidence = self._confidence(signal, data)
+            
+            if self.tracker:
+                weight = self.tracker.get_context_weight(signal_type)
+                ai_weight = self.tracker.get_ai_weight(1.0)
+                confidence = int(min(10, confidence * weight * ai_weight))
 
             positives, negatives = self._factors(data, price, resistance)
 
+            range_height = range_high - range_low
+            
+            target_3 = price * 1.10 if direction == "BUY" else price * 0.90
+            t3_pct = self._pct(target_3, price) if direction == "BUY" else self._pct(price, target_3)
+            rr3 = self._rr(price, sl, target_3)
+            
+            expected_duration = self._estimate_duration(atr, price)
+            
+            position_size, capital_required = self._calculate_position_size(
+                price=price,
+                stop_loss=sl,
+                capital=self.config.get('capital', 100000),
+                risk_per_trade=self.config.get('risk_per_trade', 1)
+            )
+
             return TradeSetup(
-                stock_symbol=stock_symbol,
+                stock_symbol=symbol,
                 signal_type=signal_type,
                 timestamp=datetime.now(),
+                direction=direction,
                 current_price=price,
                 entry_min=round(entry_min, 2),
                 entry_max=round(entry_max, 2),
@@ -212,296 +265,33 @@ class TradeSetupGenerator:
                 target_1=round(target_1, 2),
                 target_1_pct=round(t1_pct, 2),
                 target_1_rr=round(rr1, 2),
-                target_1_distance=round(target_1 - price, 2),
+                target_1_distance=round(abs(target_1 - price), 2),
                 target_2=round(target_2, 2),
                 target_2_pct=round(t2_pct, 2),
                 target_2_rr=round(rr2, 2),
-                target_2_distance=round(target_2 - price, 2),
+                target_2_distance=round(abs(target_2 - price), 2),
+                target_3=round(target_3, 2),
+                target_3_pct=round(t3_pct, 2),
+                target_3_rr=round(rr3, 2),
+                target_3_distance=round(abs(target_3 - price), 2),
                 range_low=round(range_low, 2),
                 range_high=round(range_high, 2),
-                range_height=round(range_high - range_low, 2),
+                range_height=round(range_height, 2),
                 support_level=round(support, 2),
                 resistance_level=round(resistance, 2),
                 near_breakout=((resistance - price) / price) * 100 < 1,
                 breakout_distance_pct=round(((resistance - price) / price) * 100, 2),
+                expected_duration=expected_duration,
                 confidence=confidence,
                 positive_factors=positives,
-                negative_factors=negatives
+                negative_factors=negatives,
+                position_size=position_size,
+                capital_required=round(capital_required, 2)
             )
         except Exception as e:
             logger.error(f"Error generating trade setup: {e}")
             return None
     
-    def generate_from_signal(self, signal: Any, price_data: Dict[str, Any]) -> TradeSetup:
-        """
-        Generate a trade setup from a signal.
-        
-        Args:
-            signal: Signal object (VERCSignal, TrendSignal, CombinedSignal)
-            price_data: Dictionary with price and indicator data
-            
-        Returns:
-            TradeSetup object
-        """
-        stock_symbol = getattr(signal, 'stock_symbol', getattr(signal, 'ticker', 'UNKNOWN'))
-        signal_type = getattr(signal, 'signal_type', getattr(signal, 'type', 'GENERAL'))
-        
-        current_price = price_data.get('current_price', price_data.get('close', 0))
-        atr = price_data.get('atr', 0)
-        ema50 = price_data.get('ema50', price_data.get('ema_50', current_price))
-        ema20 = price_data.get('ema20', price_data.get('ema_20', current_price))
-        
-        range_low = price_data.get('range_low', current_price * 0.98)
-        range_high = price_data.get('range_high', current_price * 1.02)
-        
-        support_level = self._calculate_support(current_price, range_low, ema50)
-        resistance_level = self._calculate_resistance(current_price, range_high)
-        
-        near_breakout, breakout_dist = self._check_breakout(current_price, resistance_level)
-        
-        entry_strategy, entry_min, entry_max = self._calculate_entry(
-            current_price, resistance_level, range_low, near_breakout
-        )
-        
-        stop_loss, sl_pct, risk_level = self._calculate_stop_loss(
-            current_price, support_level, price_data
-        )
-        
-        range_height = range_high - range_low
-        
-        target_1, t1_pct, t1_rr, t1_dist = self._calculate_target(
-            current_price, stop_loss, range_height, 1.0
-        )
-        
-        target_2, t2_pct, t2_rr, t2_dist = self._calculate_target(
-            current_price, stop_loss, range_height, 1.5
-        )
-        
-        target_3, t3_pct, t3_rr, t3_dist = self._calculate_target(
-            current_price, stop_loss, resistance_level - current_price, 1.0, is_swing=True
-        )
-        
-        expected_duration = self._estimate_duration(atr, current_price)
-        
-        confidence = self._calculate_confidence(signal, price_data)
-        
-        positive_factors, negative_factors = self._analyze_factors(
-            price_data, near_breakout, range_height, current_price
-        )
-        
-        return TradeSetup(
-            stock_symbol=stock_symbol,
-            signal_type=signal_type,
-            timestamp=datetime.now(),
-            current_price=current_price,
-            entry_min=entry_min,
-            entry_max=entry_max,
-            entry_strategy=entry_strategy,
-            stop_loss=stop_loss,
-            stop_loss_pct=sl_pct,
-            risk_level=risk_level,
-            target_1=target_1,
-            target_1_pct=t1_pct,
-            target_1_rr=t1_rr,
-            target_1_distance=t1_dist,
-            target_2=target_2,
-            target_2_pct=t2_pct,
-            target_2_rr=t2_rr,
-            target_2_distance=t2_dist,
-            target_3=target_3,
-            target_3_pct=t3_pct,
-            target_3_rr=t3_rr,
-            target_3_distance=t3_dist,
-            range_low=range_low,
-            range_high=range_high,
-            range_height=range_height,
-            support_level=support_level,
-            resistance_level=resistance_level,
-            near_breakout=near_breakout,
-            breakout_distance_pct=breakout_dist,
-            expected_duration=expected_duration,
-            confidence=confidence,
-            positive_factors=positive_factors,
-            negative_factors=negative_factors
-        )
-    
-    def _calculate_support(self, current_price: float, range_low: float, ema50: float) -> float:
-        """Calculate support level."""
-        return min(range_low, ema50 * 0.98)
-    
-    def _calculate_resistance(self, current_price: float, range_high: float) -> float:
-        """Calculate resistance level."""
-        return range_high
-    
-    def _check_breakout(self, current_price: float, resistance: float) -> tuple:
-        """Check if price is near breakout."""
-        if resistance <= 0:
-            return False, 0.0
-        distance = resistance - current_price
-        distance_pct = (distance / current_price) * 100
-        near = distance_pct <= self.BREAKOUT_THRESHOLD
-        return near, distance_pct
-    
-    def _calculate_entry(self, current_price: float, resistance: float, 
-                         range_low: float, near_breakout: bool) -> tuple:
-        """Calculate entry zone and strategy."""
-        if near_breakout:
-            entry_strategy = "Breakout Entry"
-            entry_min = resistance
-            entry_max = resistance * 1.005
-        else:
-            entry_strategy = "Early Accumulation Entry"
-            entry_min = current_price
-            entry_max = current_price * 1.01
-        
-        return entry_strategy, entry_min, entry_max
-    
-    def _calculate_stop_loss(self, current_price: float, support: float, 
-                             price_data: Dict[str, Any]) -> tuple:
-        """Calculate stop loss and risk level."""
-        calculated_sl = support * 0.98
-        
-        sl_pct = ((current_price - calculated_sl) / current_price) * 100
-        
-        if sl_pct <= 1.5:
-            risk_level = "Low"
-        elif sl_pct <= 3.0:
-            risk_level = "Moderate"
-        else:
-            risk_level = "High"
-        
-        return calculated_sl, round(sl_pct, 2), risk_level
-    
-    def _calculate_target(self, current_price: float, stop_loss: float, 
-                          distance: float, multiplier: float, is_swing: bool = False) -> tuple:
-        """Calculate target price, percentage, R:R ratio, and distance."""
-        if is_swing:
-            target = current_price + distance
-        else:
-            target = current_price + (distance * multiplier)
-        
-        target_pct = ((target - current_price) / current_price) * 100
-        
-        risk = current_price - stop_loss
-        reward = target - current_price
-        rr = round(reward / risk, 2) if risk > 0 else 0
-        
-        distance_points = round(target - current_price, 2)
-        
-        return round(target, 2), round(target_pct, 2), rr, distance_points
-    
-    def _estimate_duration(self, atr: float, current_price: float) -> str:
-        """Estimate expected duration based on ATR."""
-        if atr <= 0:
-            return "Unknown"
-        
-        atr_pct = (atr / current_price) * 100
-        
-        if atr_pct < 1.0:
-            return "short_term"
-        elif atr_pct < 2.0:
-            return "medium_term"
-        else:
-            return "long_term"
-    
-    def _calculate_confidence(self, signal: Any, price_data: Dict[str, Any]) -> int:
-        """Calculate confidence score."""
-        base_confidence = getattr(signal, 'confidence', 7)
-        
-        volume_ratio = price_data.get('volume_ratio', 1.0)
-        if volume_ratio > 1.5:
-            base_confidence += 1
-        
-        near_breakout = price_data.get('near_breakout', False)
-        if near_breakout:
-            base_confidence += 1
-        
-        return min(10, base_confidence)
-    
-    def _analyze_factors(self, price_data: Dict[str, Any], near_breakout: bool,
-                         range_height: float, current_price: float) -> tuple:
-        """Analyze positive and negative factors."""
-        positive = []
-        negative = []
-        
-        volume_ratio = price_data.get('volume_ratio', 1.0)
-        if volume_ratio > 1.3:
-            positive.append("Volume expansion detected")
-        elif volume_ratio < 0.8:
-            negative.append("Low volume")
-        
-        if near_breakout:
-            positive.append("Near breakout")
-        
-        ema_alignment = price_data.get('ema_alignment_score', 0)
-        if ema_alignment >= 3:
-            positive.append("Strong EMA alignment")
-        elif ema_alignment <= 1:
-            negative.append("Weak EMA alignment")
-        
-        rsi = price_data.get('rsi', 50)
-        if 40 <= rsi <= 70:
-            positive.append("RSI in optimal zone")
-        elif rsi > 70:
-            negative.append("RSI overbought")
-        elif rsi < 30:
-            positive.append("RSI oversold")
-        
-        range_compression = (range_height / current_price) * 100
-        if range_compression < 3:
-            positive.append("Tight range compression")
-        elif range_compression > 8:
-            negative.append("Wide range")
-        
-        return positive, negative
-    
-    def format_alert_message(self, trade_setup: TradeSetup) -> str:
-        """Format trade setup as Telegram alert message."""
-        msg = f"📊 *{trade_setup.signal_type} SIGNAL*\n\n"
-        msg += f"Stock: *{trade_setup.stock_symbol}*\n"
-        msg += f"Price: ₹{trade_setup.current_price:.2f}\n\n"
-        
-        msg += f"🎯 *Entry:*\n"
-        msg += f"  Strategy: {trade_setup.entry_strategy}\n"
-        msg += f"  Zone: ₹{trade_setup.entry_min:.2f} - ₹{trade_setup.entry_max:.2f}\n\n"
-        
-        msg += f"🛡️ *Stop Loss:*\n"
-        msg += f"  SL: ₹{trade_setup.stop_loss:.2f} ({trade_setup.stop_loss_pct:.1f}%)\n"
-        msg += f"  Risk Level: {trade_setup.risk_level}\n\n"
-        
-        msg += f"🎯 *Targets:*\n"
-        msg += f"  T1: ₹{trade_setup.target_1:.2f} (+{trade_setup.target_1_pct:.1f}%) R:R {trade_setup.target_1_rr}\n"
-        msg += f"  T2: ₹{trade_setup.target_2:.2f} (+{trade_setup.target_2_pct:.1f}%) R:R {trade_setup.target_2_rr}\n"
-        if trade_setup.target_3:
-            msg += f"  T3: ₹{trade_setup.target_3:.2f} (+{trade_setup.target_3_pct:.1f}%) R:R {trade_setup.target_3_rr}\n"
-        msg += "\n"
-        
-        msg += f"📈 *Technical Levels:*\n"
-        msg += f"  Support: ₹{trade_setup.support_level:.2f}\n"
-        msg += f"  Resistance: ₹{trade_setup.resistance_level:.2f}\n"
-        msg += f"  Range: ₹{trade_setup.range_low:.2f} - ₹{trade_setup.range_high:.2f}\n"
-        
-        if trade_setup.near_breakout:
-            msg += f"\n⚡ Near Breakout: {trade_setup.breakout_distance_pct:.1f}% away\n"
-        
-        msg += f"\n⏱️ Expected: {trade_setup.expected_duration}\n"
-        msg += f"Confidence: {trade_setup.confidence}/10\n"
-        
-        if trade_setup.positive_factors:
-            msg += f"\n✅ *Positives:*\n"
-            for factor in trade_setup.positive_factors[:3]:
-                msg += f"  • {factor}\n"
-        
-        if trade_setup.negative_factors:
-            msg += f"\n⚠️ *Negatives:*\n"
-            for factor in trade_setup.negative_factors[:3]:
-                msg += f"  • {factor}\n"
-        
-        if trade_setup.ai_reasoning:
-            msg += f"\n💡 *AI Insight:*\n{trade_setup.ai_reasoning[:200]}..."
-        
-        return msg
-
     def _entry(self, price, resistance):
         dist_pct = ((resistance - price) / price) * 100
 
@@ -554,8 +344,105 @@ class TradeSetupGenerator:
             neg.append("Low volume")
 
         return pos, neg
+    
+    def _estimate_duration(self, atr: float, current_price: float) -> str:
+        """Estimate expected duration based on ATR."""
+        if atr <= 0:
+            return "Unknown"
+        
+        atr_pct = (atr / current_price) * 100
+        
+        if atr_pct < 1.0:
+            return "short_term"
+        elif atr_pct < 2.0:
+            return "medium_term"
+        else:
+            return "long_term"
+    
+    def _calculate_position_size(
+        self,
+        price: float,
+        stop_loss: float,
+        capital: float = 100000,
+        risk_per_trade: float = 1.0
+    ) -> Tuple[int, float]:
+        """
+        Calculate position size based on risk per trade.
+        
+        Args:
+            price: Current price
+            stop_loss: Stop loss price
+            capital: Total capital
+            risk_per_trade: Risk percentage per trade
+            
+        Returns:
+            Tuple of (position_size, capital_required)
+        """
+        risk_amount = capital * (risk_per_trade / 100)
+        risk_per_share = abs(price - stop_loss)
+        
+        if risk_per_share <= 0:
+            return 0, 0.0
+        
+        qty = int(risk_amount / risk_per_share)
+        capital_required = qty * price
+        
+        return qty, capital_required
+
+    def format_alert_message(self, trade_setup: TradeSetup) -> str:
+        """Format trade setup as Telegram alert message."""
+        direction_emoji = "🟢" if trade_setup.direction == "BUY" else "🔴"
+        
+        msg = f"📊 *{trade_setup.signal_type} SIGNAL* {direction_emoji}\n\n"
+        msg += f"Stock: *{trade_setup.stock_symbol}*\n"
+        msg += f"Direction: *{trade_setup.direction}*\n"
+        msg += f"Price: ₹{trade_setup.current_price:.2f}\n\n"
+        
+        msg += f"🎯 *Entry:*\n"
+        msg += f"  Strategy: {trade_setup.entry_strategy}\n"
+        msg += f"  Zone: ₹{trade_setup.entry_min:.2f} - ₹{trade_setup.entry_max:.2f}\n\n"
+        
+        msg += f"🛡️ *Stop Loss:*\n"
+        msg += f"  SL: ₹{trade_setup.stop_loss:.2f} ({trade_setup.stop_loss_pct:.1f}%)\n"
+        msg += f"  Risk Level: {trade_setup.risk_level}\n\n"
+        
+        msg += f"🎯 *Targets:*\n"
+        msg += f"  T1: ₹{trade_setup.target_1:.2f} (+{trade_setup.target_1_pct:.1f}%) R:R {trade_setup.target_1_rr}\n"
+        msg += f"  T2: ₹{trade_setup.target_2:.2f} (+{trade_setup.target_2_pct:.1f}%) R:R {trade_setup.target_2_rr}\n"
+        if trade_setup.target_3:
+            msg += f"  T3: ₹{trade_setup.target_3:.2f} (+{trade_setup.target_3_pct:.1f}%) R:R {trade_setup.target_3_rr}\n"
+        msg += "\n"
+        
+        msg += f"📈 *Technical Levels:*\n"
+        msg += f"  Support: ₹{trade_setup.support_level:.2f}\n"
+        msg += f"  Resistance: ₹{trade_setup.resistance_level:.2f}\n"
+        msg += f"  Range: ₹{trade_setup.range_low:.2f} - ₹{trade_setup.range_high:.2f}\n"
+        
+        if trade_setup.near_breakout:
+            msg += f"\n⚡ Near Breakout: {trade_setup.breakout_distance_pct:.1f}% away\n"
+        
+        msg += f"\n⏱️ Expected: {trade_setup.expected_duration}\n"
+        msg += f"Confidence: {trade_setup.confidence}/10\n"
+        
+        if trade_setup.positive_factors:
+            msg += f"\n✅ *Positives:*\n"
+            for factor in trade_setup.positive_factors[:3]:
+                msg += f"  • {factor}\n"
+        
+        if trade_setup.negative_factors:
+            msg += f"\n⚠️ *Negatives:*\n"
+            for factor in trade_setup.negative_factors[:3]:
+                msg += f"  • {factor}\n"
+        
+        if trade_setup.ai_reasoning:
+            msg += f"\n💡 *AI Insight:*\n{trade_setup.ai_reasoning[:200]}..."
+        
+        return msg
 
 
-def create_trade_generator(config: Optional[Dict[str, Any]] = None) -> TradeSetupGenerator:
+def create_trade_generator(
+    config: Optional[Dict[str, Any]] = None,
+    tracker: Optional[Any] = None
+) -> TradeSetupGenerator:
     """Factory function to create TradeSetupGenerator."""
-    return TradeSetupGenerator(config)
+    return TradeSetupGenerator(config, tracker)

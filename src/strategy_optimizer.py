@@ -50,6 +50,8 @@ class StrategyPerformanceTracker:
         'atr_min': 0.1,
         'breakout_strength_min': 0.0
     }
+
+    TIMEOUT_PENALTY_RR = -0.5
     
     def __init__(self, trade_journal, data_dir: str = DATA_DIR):
         self.trade_journal = trade_journal
@@ -611,6 +613,125 @@ class StrategyPerformanceTracker:
         base_weight = self.strategy_weights.get(strategy, 0.5)
         context_multiplier = self.context_weights.get(context_key, 1.0)
         return round(base_weight * context_multiplier, 3)
+
+    def get_failure_patterns(self) -> Dict[str, Any]:
+        """
+        Extract patterns from losing trades to identify what fails most.
+        
+        Returns:
+            Dict with avg_rsi, avg_volume, avg_breakout_strength, etc.
+        """
+        closed = self.trade_journal.get_closed_trades(200)
+        losses = [t for t in closed if t.get('outcome') in ['LOSS', 'TIMEOUT']]
+        
+        if not losses:
+            return {
+                'avg_rsi': 0,
+                'avg_volume_ratio': 0,
+                'avg_breakout_strength': 0,
+                'atr_avg': 0,
+                'loss_count': 0
+            }
+        
+        rsi_values = [t.get('rsi', 0) for t in losses if t.get('rsi')]
+        volume_values = [t.get('volume_ratio', 0) for t in losses if t.get('volume_ratio')]
+        breakout_values = [t.get('breakout_strength', 0) for t in losses if t.get('breakout_strength')]
+        atr_values = [t.get('atr', 0) for t in losses if t.get('atr')]
+        
+        return {
+            'avg_rsi': round(sum(rsi_values) / len(rsi_values), 2) if rsi_values else 0,
+            'avg_volume_ratio': round(sum(volume_values) / len(volume_values), 2) if volume_values else 0,
+            'avg_breakout_strength': round(sum(breakout_values) / len(breakout_values), 3) if breakout_values else 0,
+            'atr_avg': round(sum(atr_values) / len(atr_values), 2) if atr_values else 0,
+            'loss_count': len(losses)
+        }
+
+    def detect_market_condition(
+        self,
+        ema_20: float,
+        ema_50: float,
+        atr: float,
+        nifty_direction: Optional[str] = None
+    ) -> str:
+        """
+        Auto-detect market condition using EMA spread and ATR.
+        
+        Args:
+            ema_20: 20-period EMA
+            ema_50: 50-period EMA
+            atr: Average True Range
+            nifty_direction: Optional NIFTY direction for confirmation
+            
+        Returns:
+            'TRENDING' or 'SIDEWAYS'
+        """
+        if ema_20 <= 0 or ema_50 <= 0:
+            return self._current_market_condition
+        
+        spread = abs(ema_20 - ema_50) / ema_50
+        
+        if spread > 0.02 and atr > 1.0:
+            condition = 'TRENDING'
+        else:
+            condition = 'SIDEWAYS'
+        
+        if nifty_direction and nifty_direction != 'SIDEWAYS':
+            if nifty_direction == 'BEARISH':
+                condition = 'SIDEWAYS'
+        
+        self._current_market_condition = condition
+        return condition
+
+    def calculate_timeout_penalty_rr(self) -> float:
+        """Get penalty RR for TIMEOUT trades."""
+        return self.TIMEOUT_PENALTY_RR
+
+    def adapt_filters_from_failure_patterns(self) -> Dict[str, Any]:
+        """
+        Automatically adapt filters based on failure patterns extracted from losing trades.
+        
+        Uses get_failure_patterns() to identify what parameters correlate with losses,
+        then tightens/adjusts adaptive filters accordingly.
+        
+        Returns:
+            Updated filter values with explanation of changes
+        """
+        patterns = self.get_failure_patterns()
+        
+        if patterns.get('loss_count', 0) < 10:
+            return self.adaptive_filters.copy()
+        
+        changes = []
+        
+        avg_rsi = patterns.get('avg_rsi', 0)
+        if avg_rsi > 65:
+            current = self.adaptive_filters['rsi_max']
+            new_value = max(self.FILTER_FLOORS['rsi_max'], current - 5)
+            if new_value != current:
+                self.adaptive_filters['rsi_max'] = new_value
+                changes.append(f"rsi_max: {current} → {new_value} (avg_rsi in losses: {avg_rsi})")
+        
+        avg_volume = patterns.get('avg_volume_ratio', 0)
+        if avg_volume < 1.8:
+            current = self.adaptive_filters['volume_ratio_min']
+            new_value = min(self.FILTER_CAPS['volume_ratio_min'], current + 0.2)
+            if new_value != current:
+                self.adaptive_filters['volume_ratio_min'] = new_value
+                changes.append(f"volume_ratio_min: {current} → {new_value} (avg_volume in losses: {avg_volume})")
+        
+        avg_breakout = patterns.get('avg_breakout_strength', 0)
+        if avg_breakout < 0.05:
+            current = self.adaptive_filters['breakout_strength_min']
+            new_value = min(self.FILTER_CAPS['breakout_strength_min'], current + 0.01)
+            if new_value != current:
+                self.adaptive_filters['breakout_strength_min'] = new_value
+                changes.append(f"breakout_strength_min: {current} → {new_value} (avg_breakout in losses: {avg_breakout})")
+        
+        if changes:
+            self._save_filters()
+            logger.info(f"Failure pattern adaptations: {changes}")
+        
+        return self.adaptive_filters.copy()
     
     def _save_filters(self) -> None:
         filepath = os.path.join(self.data_dir, 'adaptive_filters.json')

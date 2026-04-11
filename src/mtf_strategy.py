@@ -251,12 +251,27 @@ class StructureDetector:
         recent_highs = swing_highs[-3:] if len(swing_highs) >= 3 else swing_highs
         recent_lows = swing_lows[-3:] if len(swing_lows) >= 3 else swing_lows
         
-        # Determine structure
-        if len(recent_highs) >= 2 and len(recent_lows) >= 2:
-            # Higher Highs + Higher Lows
+        # Determine structure with 3 confirmations (more robust)
+        if len(recent_highs) >= 3 and len(recent_lows) >= 3:
+            # Higher Highs + Higher Lows (all 3 should trend up)
+            if recent_highs[-1] > recent_highs[-2] > recent_highs[-3] and \
+               recent_lows[-1] > recent_lows[-2] > recent_lows[-3]:
+                status = "HIGHER_HIGHS"
+            # Lower Highs + Lower Lows (all 3 should trend down)
+            elif recent_highs[-1] < recent_highs[-2] < recent_highs[-3] and \
+                 recent_lows[-1] < recent_lows[-2] < recent_lows[-3]:
+                status = "LOWER_LOWS"
+            # 2 confirmations (weaker but still valid)
+            elif recent_highs[-1] > recent_highs[-2] and recent_lows[-1] > recent_lows[-2]:
+                status = "HIGHER_HIGHS"
+            elif recent_highs[-1] < recent_highs[-2] and recent_lows[-1] < recent_lows[-2]:
+                status = "LOWER_LOWS"
+            else:
+                status = "SIDEWAYS"
+        elif len(recent_highs) >= 2 and len(recent_lows) >= 2:
+            # Fallback to 2 confirmations
             if recent_highs[-1] > recent_highs[-2] and recent_lows[-1] > recent_lows[-2]:
                 status = "HIGHER_HIGHS"
-            # Lower Highs + Lower Lows
             elif recent_highs[-1] < recent_highs[-2] and recent_lows[-1] < recent_lows[-2]:
                 status = "LOWER_LOWS"
             else:
@@ -340,25 +355,49 @@ class PullbackDetector:
                 level=ema_100,
                 distance_to_pullback=distance_100
             )
-        else:
-            # Check if price just pulled back (within recent candles)
-            # For now, mark as COMPLETE if price is approaching EMAs
-            if trend_direction == "BULLISH":
-                # Price should be above EMAs but could be approaching
-                if current_price > ema_50 and current_price > ema_100:
-                    # Price has pulled back to EMAs and is moving up
-                    if current_price < df['close'].iloc[-5] if len(df) >= 5 else current_price:
-                        return PullbackAnalysis(
-                            status="COMPLETE",
-                            level=ema_50,
-                            distance_to_pullback=distance_50
-                        )
-            
-            return PullbackAnalysis(
-                status="ACTIVE",
-                level=ema_50 if distance_50 < distance_100 else ema_100,
-                distance_to_pullback=min(distance_50, distance_100)
-            )
+        
+        # Better pullback detection: Check if recent lows touched EMAs (traditional approach)
+        # Check if any low in last 5 candles is within 1% of EMA
+        recent_lows = df['low'].tail(5).values
+        ema_touch_threshold = 0.01  # 1% tolerance
+        
+        for low in recent_lows:
+            if abs(low - ema_50) / ema_50 < ema_touch_threshold:
+                return PullbackAnalysis(
+                    status="COMPLETE",
+                    level=ema_50,
+                    distance_to_pullback=distance_50
+                )
+            if abs(low - ema_100) / ema_100 < ema_touch_threshold:
+                return PullbackAnalysis(
+                    status="COMPLETE",
+                    level=ema_100,
+                    distance_to_pullback=distance_100
+                )
+        
+        # Check if price just pulled back (within recent candles) - price approaching EMAs
+        if trend_direction == "BULLISH":
+            if current_price > ema_50 and current_price > ema_100:
+                if current_price < df['close'].iloc[-5] if len(df) >= 5 else current_price:
+                    return PullbackAnalysis(
+                        status="COMPLETE",
+                        level=ema_50,
+                        distance_to_pullback=distance_50
+                    )
+        elif trend_direction == "BEARISH":
+            if current_price < ema_50 and current_price < ema_100:
+                if current_price > df['close'].iloc[-5] if len(df) >= 5 else current_price:
+                    return PullbackAnalysis(
+                        status="COMPLETE",
+                        level=ema_50,
+                        distance_to_pullback=distance_50
+                    )
+        
+        return PullbackAnalysis(
+            status="ACTIVE",
+            level=ema_50 if distance_50 < distance_100 else ema_100,
+            distance_to_pullback=min(distance_50, distance_100)
+        )
 
 
 # ============================================================================
@@ -367,13 +406,50 @@ class PullbackDetector:
 
 class VolumeAnalyzer:
     """
-    Analyzes volume for confirmation:
+    Analyzes volume for confirmation with context:
     - Current volume > Volume MA(30)
-    - Flags volume spikes
+    - Compare with last breakout volume
+    - Check volume trend (rising/falling)
     """
     
     def __init__(self, ma_period: int = 30):
         self.ma_period = ma_period
+    
+    def get_volume_context(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Get additional volume context for confidence scoring"""
+        if df is None or len(df) < self.ma_period:
+            return {"trend": "unknown", "last_breakout_vol": 0, "volume_change": 0}
+        
+        volumes = df['volume'].tail(10).values
+        current_vol = volumes[-1]
+        
+        # Volume trend (rising or falling)
+        if len(volumes) >= 5:
+            recent_avg = volumes[-5:].mean()
+            older_avg = volumes[-10:-5].mean()
+            if older_avg > 0:
+                volume_change = (recent_avg - older_avg) / older_avg
+                trend = "rising" if volume_change > 0.1 else "falling" if volume_change < -0.1 else "stable"
+            else:
+                trend = "unknown"
+                volume_change = 0
+        else:
+            trend = "unknown"
+            volume_change = 0
+        
+        # Find last significant breakout (high volume spike)
+        vol_ma = df['volume'].rolling(window=20).mean()
+        last_breakout_vol = 0
+        for i in range(len(volumes) - 2, max(0, len(volumes) - 10), -1):
+            if volumes[i] > vol_ma.iloc[i] * 1.5:
+                last_breakout_vol = volumes[i]
+                break
+        
+        return {
+            "trend": trend,
+            "last_breakout_vol": last_breakout_vol,
+            "volume_change": volume_change
+        }
     
     def analyze(self, df: pd.DataFrame) -> Tuple[bool, float]:
         """
@@ -398,8 +474,11 @@ class VolumeAnalyzer:
         
         volume_ratio = current_volume / volume_ma
         
-        # Confirm if volume is above average
-        volume_confirmed = volume_ratio > 1.0
+        # Context-aware confirmation
+        context = self.get_volume_context(df)
+        
+        # More lenient: volume confirmed if above average OR rising trend
+        volume_confirmed = volume_ratio > 1.0 or context["trend"] == "rising"
         
         return volume_confirmed, volume_ratio
 
@@ -453,7 +532,7 @@ class BreakoutDetector:
             support = swing_low
             
             if current_close > resistance:
-                min_breakout = resistance * 1.003
+                min_breakout = resistance * 1.0015
                 if current_close < min_breakout:
                     return EntryAnalysis(
                         breakout_detected=False,
@@ -467,7 +546,7 @@ class BreakoutDetector:
                 if total_range > 0:
                     body_ratio = body_height / total_range
                     
-                    if body_ratio >= 0.5:
+                    if body_ratio >= 0.4:
                         return EntryAnalysis(
                             breakout_detected=True,
                             breakout_type="STRONG_BODY",
@@ -493,7 +572,7 @@ class BreakoutDetector:
             resistance = swing_low
             
             if current_close < support:
-                max_breakout = support * 0.997
+                max_breakout = support * 0.9985
                 if current_close > max_breakout:
                     return EntryAnalysis(
                         breakout_detected=False,
@@ -507,7 +586,7 @@ class BreakoutDetector:
                 if total_range > 0:
                     body_ratio = body_height / total_range
                     
-                    if body_ratio >= 0.5:
+                    if body_ratio >= 0.4:
                         return EntryAnalysis(
                             breakout_detected=True,
                             breakout_type="STRONG_BODY",
@@ -632,25 +711,50 @@ class TradeValidator:
         
         # Calculate entry parameters FIRST (needed for rejection checks)
         current_price = indicators_15m.get('close', indicators_1h.get('close', indicators_1d.get('close', 0)))
+        risk = 0
+        risk_reward_1 = 2.0
+        risk_reward_2 = 3.0
         
         if trend_direction == "BULLISH":
             entry_price = current_price
             stop_loss = structure.swing_low
             risk = entry_price - stop_loss
-            target_1 = entry_price + (risk * 2)
-            target_2 = entry_price + (risk * 3)
-            risk_reward_1 = 2.0
-            risk_reward_2 = 3.0
             signal_type = "BUY"
+            
+            # Structure-based targets (more adaptive than fixed RR)
+            # Target 1: Next resistance / swing high
+            if structure.swing_high > entry_price:
+                next_resistance = structure.swing_high * 1.002
+            else:
+                next_resistance = entry_price * 1.02
+            target_1 = next_resistance
+            # Target 2: Next major structure (use RR as fallback)
+            target_2 = entry_price + (risk * 3) if risk > 0 else entry_price * 1.03
+            
+            # Calculate actual risk/reward
+            if risk > 0:
+                risk_reward_1 = (target_1 - entry_price) / risk
+                risk_reward_2 = (target_2 - entry_price) / risk
         else:
             entry_price = current_price
             stop_loss = structure.swing_high
             risk = stop_loss - entry_price
-            target_1 = entry_price - (risk * 2)
-            target_2 = entry_price - (risk * 3)
-            risk_reward_1 = 2.0
-            risk_reward_2 = 3.0
             signal_type = "SELL"
+            
+            # Structure-based targets
+            # Target 1: Next support / swing low
+            if structure.swing_low < entry_price:
+                next_support = structure.swing_low * 0.998
+            else:
+                next_support = entry_price * 0.98
+            target_1 = next_support
+            # Target 2: Next major structure (use RR as fallback)
+            target_2 = entry_price - (risk * 3) if risk > 0 else entry_price * 0.97
+            
+            # Calculate actual risk/reward
+            if risk > 0:
+                risk_reward_1 = (entry_price - target_1) / risk
+                risk_reward_2 = (entry_price - target_2) / risk
         
         # Now apply rejection rules (with all required params)
         rejection_reason = self._check_rejections(
@@ -820,84 +924,67 @@ class TradeValidator:
         Returns None if valid, rejection reason if rejected.
         """
         # ========================================
-        # HARD REJECTION RULES (MANDATORY)
+        # HARD REJECTION RULES (MANDATORY) - Only 2-3 critical rejects
         # ========================================
         
-        # 1. Volume ratio check (minimum 1.3x)
-        if volume_ratio < 1.3:
-            logger.info(f"REJECT: LOW_VOLUME - volume_ratio={volume_ratio:.2f} < 1.3")
-            return self.REJECT_LOW_VOLUME
-        
-        # 2. Breakout type WEAKCANDLE check
-        if breakout.breakout_type == "WEAK_CANDLE":
-            logger.info(f"REJECT: WEAK_BREAKOUT - breakout_type={breakout.breakout_type}")
-            return self.REJECT_WEAK_BREAKOUT
-        
-        # 3. ATR check (minimum 0.5%)
-        if atr_percent < 0.5:
-            logger.info(f"REJECT: LOW_ATR - atr_percent={atr_percent:.2f}% < 0.5%")
-            return self.REJECT_LOW_ATR
-        
-        # 4. EMA200 check (mandatory on 1H)
+        # 1. STRICT: EMA200 check (mandatory - cannot trade without it)
         if indicators_1h:
             ema_200 = indicators_1h.get('ema_200', 0)
             if ema_200 <= 0:
                 logger.info("REJECT: MISSING_EMA200 - ema_200 is None or missing")
                 return self.REJECT_MISSING_EMA200
         
-        # 5. Stop loss percentage check (minimum 0.5%)
+        # 2. STRICT: Stop loss percentage check (minimum 0.5%)
         if entry_price > 0 and stop_loss > 0:
             sl_percent = self._calculate_stop_loss_percent(entry_price, stop_loss, signal_type)
             if sl_percent < 0.5:
                 logger.info(f"REJECT: LOW_STOP_LOSS - sl_percent={sl_percent:.2f}% < 0.5%")
                 return self.REJECT_LOW_STOP_LOSS
         
-        # 6. Risk/reward check for Target1 (minimum 1.5)
-        if risk_reward_1 < 1.5:
-            logger.info(f"REJECT: LOW_RISK_REWARD - risk_reward_1={risk_reward_1:.2f} < 1.5")
-            return self.REJECT_LOW_RISK_REWARD
-        
-        # ========================================
-        # TREND CONSISTENCY CHECK
-        # ========================================
-        if indicators_1h:
-            trend_consistent, trend_check_msg = self._check_trend_consistency(signal_type, indicators_1h)
-            if not trend_consistent:
-                logger.info(f"REJECT: INVALID_TREND - {trend_check_msg}")
-                return self.REJECT_INVALID_TREND
-        
-        # ========================================
-        # SIDEWAYS MARKET FILTER
-        # ========================================
+        # 3. STRICT: Sideways market (no structure)
         if structure_status == "SIDEWAYS":
             logger.info(f"REJECT: SIDEWAYS_MARKET - structure_status={structure_status}")
             return self.REJECT_SIDEWAYS_MARKET
         
         # ========================================
-        # ORIGINAL VALIDATION RULES
+        # SOFT FILTERS (reduce confidence, don't reject)
         # ========================================
         
-        # Reject if EMAs flat or tangled
+        # Volume: Will reduce score if low, but allow trading
+        if volume_ratio < 1.3:
+            logger.info(f"SOFT: LOW_VOLUME - volume_ratio={volume_ratio:.2f} < 1.3, score -= 2")
+            # This is handled in _calculate_confidence via caps
+        
+        # ATR: Will reduce score if low
+        if atr_percent < 0.5:
+            logger.info(f"SOFT: LOW_ATR - atr_percent={atr_percent:.2f}% < 0.5%, score -= 2")
+        
+        # ========================================
+        # TREND CONSISTENCY: Only strict check on 1D, flexible on 1H
+        # ========================================
+        # Using EMAAlignmentValidator (flexible) on 1H - don't duplicate with strict check
+        
+        # ========================================
+        # SOFT VALIDATION RULES (reduce score, don't reject)
+        # ========================================
+        
+        # Reject if EMAs flat or tangled (soft - reduces score)
         if ema_alignment == "FLAT":
-            return self.REJECT_EMA_FLAT
+            logger.info("SOFT: EMA_FLAT - no clear direction, score capped")
         if ema_alignment == "TANGLED":
-            return self.REJECT_EMA_TANGLED
+            logger.info("SOFT: EMA_TANGLED - EMAs tangled, score capped")
         
-        # Reject if volume low
-        if not volume_confirmed:
-            return self.REJECT_VOLUME_LOW
-        
-        # Reject if no clear structure
-        if structure_status == "SIDEWAYS":
-            return self.REJECT_NO_STRUCTURE
-        
-        # Reject if no breakout confirmed
+        # Reject if no breakout confirmed (soft - reduces score)
         if not breakout.breakout_detected:
-            return self.REJECT_NO_BREAKOUT
+            logger.info("SOFT: NO_BREAKOUT - no confirmed breakout, score capped")
         
-        # Reject wick-only breakout
-        if breakout.breakout_type == "WICK_ONLY":
-            return self.REJECT_WICK_ONLY
+        # Breakout type weak candle check (soft)
+        if breakout.breakout_type in ["WEAKCANDLE", "WICK_ONLY"]:
+            logger.info(f"SOFT: WEAK_BREAKOUT - breakout_type={breakout.breakout_type}")
+        
+        # Risk/reward check (soft - don't reject, just note)
+        if risk_reward_1 < 1.5:
+            logger.info(f"SOFT: LOW_RR - risk_reward_1={risk_reward_1:.2f} < 1.5")
         
         return None
     

@@ -1,20 +1,19 @@
 """
 Scheduler Module
 
-Manages the scanner execution schedule during NSE market hours.
+Manages the scanner execution schedule during NSE market hours using APScheduler.
 """
 
-import schedule
-import time
 import logging
 import threading
-from datetime import datetime, time as dt_time
-from typing import Callable, Optional, Dict
+import time
+from datetime import datetime, time as dt_time, timedelta
+from typing import Callable, Optional, Dict, Tuple
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.executors.pool import ThreadPoolExecutor
+from apscheduler.triggers.cron import CronTrigger
 
-# Configure logging
 logger = logging.getLogger(__name__)
 
 
@@ -23,39 +22,33 @@ class MarketScheduler:
     Manages scanner execution every 15 minutes during NSE market hours.
     
     Market Hours: 09:15 AM to 03:30 PM IST
-    Scan Interval: Every 15 minutes
+    Scan Interval: Every 15 minutes (aligned to 00, 15, 30, 45)
     Special Jobs: 3:00 PM IST update
     
     Session Awareness:
-    - Pre-market (09:15-09:30): High noise, skip
-    - Mid-day (12:00-14:00): Dead zone, reduce signals
+    - Pre-market (09:00-09:15): NSE pre-open session
+    - Mid-day (12:00-14:00): Dead zone, reduce signals based on ATR
     - Closing (15:00+): Active moves
     """
     
-    # Market hours in IST
     MARKET_OPEN_HOUR = 9
     MARKET_OPEN_MINUTE = 15
     MARKET_CLOSE_HOUR = 15
     MARKET_CLOSE_MINUTE = 30
     
-    # Scan interval in minutes
     SCAN_INTERVAL = 15
     
-    # 3PM update time in IST
     PM_UPDATE_HOUR = 15
     PM_UPDATE_MINUTE = 0
     
-    # 10AM update time in IST (signal alert time)
     AM_UPDATE_HOUR = 10
     AM_UPDATE_MINUTE = 0
     
-    # Session time ranges
-    PRE_OPEN_START = dt_time(9, 15)
-    PRE_OPEN_END = dt_time(9, 30)
+    PRE_OPEN_START = dt_time(9, 0)
+    PRE_OPEN_END = dt_time(9, 15)
     MIDDAY_START = dt_time(12, 0)
     MIDDAY_END = dt_time(14, 0)
     
-    # Cooldown settings
     DEFAULT_COOLDOWN_MINUTES = 30
     
     def __init__(self):
@@ -74,11 +67,12 @@ class MarketScheduler:
         self.alert_service = None
         self.strategy = 'trend'
         self.stocks = []
-        self.last_signal_time: Dict[str, float] = {}
+        self.last_signal_time: Dict[str, Tuple[float, str, str]] = {}
         self.cooldown_minutes = self.DEFAULT_COOLDOWN_MINUTES
         self.market_condition = 'normal'
         
-        # Initialize APScheduler for continuous jobs
+        self._signal_lock = threading.Lock()
+        
         executors = {
             'default': ThreadPoolExecutor(max_workers=4)
         }
@@ -157,6 +151,46 @@ class MarketScheduler:
         
         return False
     
+    def get_midday_reduce_factor(self, stocks_data: list = None) -> float:
+        """
+        Get signal reduction factor based on ATR/volatility.
+        Returns 1.0 for normal conditions, lower for low volatility.
+        """
+        session = self.get_session_name()
+        
+        if session != 'MIDDAY' and self.market_condition != 'sideways':
+            return 1.0
+        
+        if not stocks_data:
+            return 0.5
+        
+        total_atr = 0
+        count = 0
+        for stock in stocks_data:
+            if hasattr(stock, 'atr') and stock.atr:
+                total_atr += stock.atr
+                count += 1
+        
+        if count == 0:
+            return 0.5
+        
+        avg_atr = total_atr / count
+        
+        if hasattr(stocks_data[0], 'current_price') and stocks_data[0].current_price:
+            current_price = stocks_data[0].current_price
+            atr_percent = (avg_atr / current_price) * 100 if current_price > 0 else 0
+            
+            if atr_percent < 0.5:
+                return 0.3
+            elif atr_percent < 1.0:
+                return 0.5
+            elif atr_percent < 2.0:
+                return 0.7
+            else:
+                return 1.0
+        
+        return 0.5
+    
     def should_reduce_signals(self) -> bool:
         """Check if signal count should be reduced in current session."""
         session = self.get_session_name()
@@ -171,25 +205,54 @@ class MarketScheduler:
         
         return False
     
-    def is_symbol_in_cooldown(self, symbol: str) -> bool:
-        """Check if symbol is in cooldown period."""
-        if symbol not in self.last_signal_time:
-            return False
+    def is_symbol_in_cooldown(self, symbol: str, strategy_type: str = 'TREND', direction: str = 'BUY') -> bool:
+        """
+        Check if symbol is in cooldown period for given strategy and direction.
+        """
+        key = f"{symbol}_{strategy_type}_{direction}"
         
-        elapsed = time.time() - self.last_signal_time[symbol]
+        with self._signal_lock:
+            if key in self.last_signal_time:
+                stored_ts, _, _ = self.last_signal_time[key]
+                return self._check_cooldown_elapsed(key, stored_ts)
+            
+            simple_key = symbol
+            if simple_key in self.last_signal_time:
+                stored_ts, _, _ = self.last_signal_time[simple_key]
+                return self._check_cooldown_elapsed(key, stored_ts)
+            
+            return False
+    
+    def _check_cooldown_elapsed(self, key: str, stored_ts: float) -> bool:
+        """Check if cooldown has elapsed for a specific key."""
+        elapsed = time.time() - stored_ts
         cooldown_seconds = self.cooldown_minutes * 60
         
-        if elapsed < cooldown_seconds:
-            logger.debug(f"{symbol} in cooldown: {elapsed/60:.1f} min elapsed")
-            return True
+        if elapsed >= cooldown_seconds:
+            with self._signal_lock:
+                if key in self.last_signal_time:
+                    del self.last_signal_time[key]
+            return False
         
-        del self.last_signal_time[symbol]
-        return False
+        logger.debug(f"{key} in cooldown: {elapsed/60:.1f} min elapsed")
+        return True
     
-    def record_signal(self, symbol: str):
-        """Record that a signal was sent for this symbol."""
-        self.last_signal_time[symbol] = time.time()
-        logger.debug(f"Signal recorded for {symbol}")
+    def record_signal(self, symbol: str, strategy_type: str = 'TREND', direction: str = 'BUY'):
+        """Record that a signal was sent for this symbol with strategy and direction."""
+        key = f"{symbol}_{strategy_type}_{direction}"
+        
+        with self._signal_lock:
+            self.last_signal_time[key] = (time.time(), strategy_type, direction)
+        
+        simple_key = symbol
+        if simple_key not in self.last_signal_time:
+            self.last_signal_time[simple_key] = (time.time(), strategy_type, direction)
+        else:
+            old_ts, old_strat, old_dir = self.last_signal_time[simple_key]
+            if time.time() - old_ts > 0:
+                self.last_signal_time[simple_key] = (time.time(), strategy_type, direction)
+        
+        logger.debug(f"Signal recorded for {symbol} ({strategy_type} {direction})")
     
     def is_market_open(self) -> bool:
         """
@@ -200,11 +263,9 @@ class MarketScheduler:
         """
         now = datetime.now(self.ist)
         
-        # Check if weekday (Monday=0, Sunday=6)
-        if now.weekday() >= 5:  # Saturday=5, Sunday=6
+        if now.weekday() >= 5:
             return False
         
-        # Create time objects for comparison
         current_time = now.time()
         market_open = dt_time(self.MARKET_OPEN_HOUR, self.MARKET_OPEN_MINUTE)
         market_close = dt_time(self.MARKET_CLOSE_HOUR, self.MARKET_CLOSE_MINUTE)
@@ -221,10 +282,8 @@ class MarketScheduler:
         now = datetime.now(self.ist)
         
         if now.weekday() >= 5:
-            # Find next Monday
             days_ahead = 7 - now.weekday()
             next_monday = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            from datetime import timedelta
             next_monday += timedelta(days=days_ahead)
             return (next_monday - now).total_seconds()
         
@@ -264,32 +323,17 @@ class MarketScheduler:
         return (market_close_dt - now).total_seconds()
     
     def set_scan_callback(self, callback: Callable):
-        """
-        Set the callback function to execute for each scan.
-        
-        Args:
-            callback: Function to call for scanning
-        """
+        """Set the callback function to execute for each scan."""
         self.scan_callback = callback
         logger.debug("Scan callback set")
     
     def set_pm_update_callback(self, callback: Callable):
-        """
-        Set the 3PM update callback function.
-        
-        Args:
-            callback: Function to call for 3PM update
-        """
+        """Set the 3PM update callback function."""
         self.pm_update_callback = callback
         logger.debug("PM update callback set")
     
     def set_am_update_callback(self, callback: Callable):
-        """
-        Set the 10AM signal alert callback function.
-        
-        Args:
-            callback: Function to call for 10AM update
-        """
+        """Set the 10AM signal alert callback function."""
         self.am_update_callback = callback
         logger.debug("AM update callback set")
     
@@ -367,7 +411,7 @@ class MarketScheduler:
         try:
             stocks_data = self.data_fetcher.fetch_multiple_stocks(self.stocks)
             if not stocks_data:
-                logger.warning("No stock data fetched during PM update")
+                logger.warning("No stock data fetched during update")
                 return
             
             all_signals = []
@@ -384,47 +428,83 @@ class MarketScheduler:
                     signal.strategy_type = 'VERC'
                     all_signals.append(signal)
             
-            all_signals.sort(key=lambda x: getattr(x, 'rank_score', 0), reverse=True)
-            
             filtered_signals = []
             for signal in all_signals:
                 symbol = getattr(signal, 'symbol', '')
-                if symbol and self.is_symbol_in_cooldown(symbol):
-                    logger.debug(f"Skipping {symbol}: in cooldown")
+                strategy_type = getattr(signal, 'strategy_type', 'TREND')
+                direction = getattr(signal, 'direction', 'BUY')
+                
+                if symbol and self.is_symbol_in_cooldown(symbol, strategy_type, direction):
+                    logger.debug(f"Skipping {symbol}: in cooldown ({strategy_type} {direction})")
                     continue
+                
                 filtered_signals.append(signal)
-                if len(filtered_signals) >= 5:
-                    break
             
-            reduce_factor = 0.5 if self.should_reduce_signals() else 1.0
+            filtered_signals.sort(key=lambda x: getattr(x, 'rank_score', 0), reverse=True)
+            
+            reduce_factor = self.get_midday_reduce_factor(stocks_data)
             max_signals = max(1, int(5 * reduce_factor))
             final_signals = filtered_signals[:max_signals]
             
             for signal in final_signals:
-                strategy_type = signal.strategy_type if hasattr(signal, 'strategy_type') and signal.strategy_type else 'TREND'
+                strategy_type = getattr(signal, 'strategy_type', 'TREND')
+                direction = getattr(signal, 'direction', 'BUY')
                 self.process_signal_fn(signal, strategy_type, is_startup=is_startup)
                 symbol = getattr(signal, 'symbol', '')
                 if symbol:
-                    self.record_signal(symbol)
+                    self.record_signal(symbol, strategy_type, direction)
             
-            logger.info(f"PM update processed {len(final_signals)} signals (reduced: {reduce_factor < 1.0})")
+            logger.info(f"Update processed {len(final_signals)} signals (reduce_factor: {reduce_factor})")
         except Exception as e:
             logger.error(f"Error executing scanner logic: {str(e)}")
     
     def schedule_jobs(self):
-        """Schedule the scan jobs."""
-        # Schedule scans every 15 minutes during market hours
-        # Each scan will check if it's 3PM and run signal generation
-        schedule.every(self.SCAN_INTERVAL).minutes.do(self.run_scan)
+        """Schedule the scan jobs using APScheduler with CronTrigger."""
+        scan_trigger = CronTrigger(
+            minute='0,15,30,45',
+            timezone=self.ist
+        )
         
-        # Schedule 3PM update (15:00 IST) - calls run_signal_generation
-        schedule.every().day.at("15:00").do(self.run_pm_update)
+        self.scheduler.add_job(
+            self.run_scan,
+            trigger=scan_trigger,
+            id='market_scan',
+            name='Market Scan (every 15 min at :00, :15, :30, :45)',
+            replace_existing=True
+        )
         
-        logger.debug(f"Scheduled scans every {self.SCAN_INTERVAL} minutes during market hours")
-        logger.debug("Scheduled 3PM signal generation job")
+        pm_trigger = CronTrigger(
+            hour=self.PM_UPDATE_HOUR,
+            minute=self.PM_UPDATE_MINUTE,
+            timezone=self.ist
+        )
+        
+        self.scheduler.add_job(
+            self.run_pm_update,
+            trigger=pm_trigger,
+            id='pm_update',
+            name=f'Signal Generator (daily at {self.PM_UPDATE_HOUR}:{self.PM_UPDATE_MINUTE:02d} IST)',
+            replace_existing=True
+        )
+        
+        am_trigger = CronTrigger(
+            hour=self.AM_UPDATE_HOUR,
+            minute=self.AM_UPDATE_MINUTE,
+            timezone=self.ist
+        )
+        
+        self.scheduler.add_job(
+            self.run_am_update,
+            trigger=am_trigger,
+            id='am_update',
+            name=f'Morning Signal Alert (daily at {self.AM_UPDATE_HOUR}:{self.AM_UPDATE_MINUTE:02d} IST)',
+            replace_existing=True
+        )
+        
+        logger.info("Scheduled jobs: market scan (0,15,30,45), 3PM signal generator, 10AM alert")
     
     def start(self):
-        """Start the scheduler in a background thread."""
+        """Start the scheduler."""
         if self.running:
             logger.debug("Scheduler already running")
             return
@@ -432,16 +512,11 @@ class MarketScheduler:
         self.running = True
         self.schedule_jobs()
         
-        # Start APScheduler for continuous jobs
         if self.scheduler:
             self.scheduler.start()
             logger.debug("APScheduler started")
         
-        # Start scheduler in background thread (for schedule library jobs)
-        self.scheduler_thread = threading.Thread(target=self._run_scheduler, daemon=True)
-        self.scheduler_thread.start()
-        
-        logger.debug("Scheduler started in background")
+        logger.debug("Scheduler started")
     
     def stop(self):
         """Stop the scheduler."""
@@ -449,68 +524,32 @@ class MarketScheduler:
             return
         
         self.running = False
-        schedule.clear()
         
-        # Stop APScheduler
         if self.scheduler:
             self.scheduler.shutdown(wait=False)
         
-        if self.scheduler_thread:
-            self.scheduler_thread.join(timeout=5)
-        
         logger.debug("Scheduler stopped")
     
-    def _run_scheduler(self):
-        """Run the scheduler loop."""
-        logger.debug("Scheduler loop started")
-        
-        while self.running:
-            # Check if market is open
-            if self.is_market_open():
-                # Run pending scheduled jobs
-                schedule.run_pending()
-            else:
-                # Market is closed, wait and check again
-                wait_time = self.get_time_until_market_open()
-                if wait_time:
-                    logger.debug(f"Market closed. Waiting {wait_time/60:.1f} minutes until open")
-                    time.sleep(min(wait_time, 60))  # Check at least every minute
-            
-            # Sleep for a bit to avoid CPU spinning
-            time.sleep(1)
-        
-        logger.debug("Scheduler loop exited")
-    
     def run_once(self):
-        """
-        Run a single scan immediately.
-        Used for testing or manual triggers.
-        """
+        """Run a single scan immediately."""
         if not self.is_market_open():
             logger.debug("Market is closed. Scan will run but may not have live data.")
         
         self.run_scan()
     
     def get_status(self) -> dict:
-        """
-        Get current scheduler status.
+        """Get current scheduler status."""
+        jobs = self.scheduler.get_jobs()
         
-        Returns:
-            Dictionary with status information
-        """
         return {
             'running': self.running,
             'market_open': self.is_market_open(),
-            'next_scan': str(schedule.next_run()) if schedule.next_run() else None,
-            'scheduled_jobs': len(schedule.jobs),
+            'scheduled_jobs': len(jobs),
             'ist_time': datetime.now(self.ist).strftime("%Y-%m-%d %H:%M:%S")
         }
-    
+
     def force_market_hours_scan(self):
-        """
-        Force a scan to run during market hours check.
-        This can be called externally to trigger a scan.
-        """
+        """Force a scan to run during market hours check."""
         if self.is_market_open():
             logger.debug("Forcing market hours scan...")
             self.run_scan()
@@ -518,16 +557,11 @@ class MarketScheduler:
             logger.debug("Cannot force scan - market is closed")
     
     def add_continuous_job(self, func: Callable, job_id: str = 'continuous_monitor') -> None:
-        """
-        Add continuous monitoring job - runs every 15 minutes during market hours.
-        Used for tracking active signals, checking SL/Target hits.
-        """
+        """Add continuous monitoring job."""
         from apscheduler.triggers.interval import IntervalTrigger
         
-        scan_interval = self.SCAN_INTERVAL
-        
         trigger = IntervalTrigger(
-            minutes=scan_interval,
+            minutes=self.SCAN_INTERVAL,
             timezone=self.ist
         )
         
@@ -535,19 +569,14 @@ class MarketScheduler:
             func,
             trigger=trigger,
             id=job_id,
-            name=f'Continuous Monitor (every {scan_interval} min)',
+            name=f'Continuous Monitor (every {self.SCAN_INTERVAL} min)',
             replace_existing=True
         )
         
-        logger.info(f"Continuous monitoring job scheduled: every {scan_interval} minutes")
+        logger.info(f"Continuous monitoring job scheduled: every {self.SCAN_INTERVAL} minutes")
     
     def add_signal_generation_job(self, func: Callable, job_id: str = 'signal_generator') -> None:
-        """
-        Add signal generation job - runs once daily at 3:00 PM IST.
-        Generates new trading signals (max 3 per day).
-        """
-        from apscheduler.triggers.cron import CronTrigger
-        
+        """Add signal generation job - runs once daily at 3:00 PM IST."""
         trigger = CronTrigger(
             hour=self.PM_UPDATE_HOUR,
             minute=self.PM_UPDATE_MINUTE,
@@ -566,15 +595,7 @@ class MarketScheduler:
 
 
 def create_scheduler(scan_callback: Callable) -> MarketScheduler:
-    """
-    Factory function to create and configure a scheduler.
-    
-    Args:
-        scan_callback: Function to call for scanning
-        
-    Returns:
-        Configured MarketScheduler instance
-    """
+    """Factory function to create and configure a scheduler."""
     scheduler = MarketScheduler()
     scheduler.set_scan_callback(scan_callback)
     return scheduler
