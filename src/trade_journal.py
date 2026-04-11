@@ -117,8 +117,14 @@ class TradeJournal:
         return True
     
     def _check_consecutive_losses(self, symbol: str) -> int:
-        """Check consecutive losses for a symbol."""
-        symbol_trades = [t for t in self.trades if t.get('symbol') == symbol]
+        """Check consecutive losses for a symbol within 30 days."""
+        cutoff = datetime.now() - timedelta(days=30)
+        
+        symbol_trades = [
+            t for t in self.trades
+            if t.get('symbol') == symbol and 
+            datetime.fromisoformat(t.get('timestamp', '2000-01-01')) > cutoff
+        ]
         symbol_trades.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
         
         consecutive_losses = 0
@@ -184,8 +190,10 @@ class TradeJournal:
             'trades': self.trades
         }
         try:
-            with open(filepath, 'w') as f:
+            tmp_path = filepath + ".tmp"
+            with open(tmp_path, 'w') as f:
                 json.dump(data, f, indent=2, default=str)
+            os.replace(tmp_path, filepath)
         except Exception as e:
             logger.error(f"Error saving trades: {e}")
     
@@ -224,6 +232,11 @@ class TradeJournal:
         """
         trade_id = f"{strategy}_{symbol}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:6]}"
         
+        existing = self.check_signal_exists(symbol, strategy, entry)
+        if existing:
+            logger.info(f"Duplicate signal skipped: {symbol}")
+            return existing.get('trade_id', '')
+        
         trade = {
             'trade_id': trade_id,
             'symbol': symbol,
@@ -244,7 +257,7 @@ class TradeJournal:
             'rsi': indicators.get('rsi', 0) if indicators else 0,
             'trend_score': indicators.get('trend_score', 0) if indicators else 0,
             'verc_score': indicators.get('verc_score', 0) if indicators else 0,
-            'rank_score': indicators.get('rank_score', 0) if indicators else 0,
+            'rank_score': 0.0,
             'quality': quality,
             'market_context': market_context,
             'entry_type': entry_type,
@@ -252,6 +265,8 @@ class TradeJournal:
             'breakout_strength': breakout_strength,
             'updated_at': datetime.now().isoformat()
         }
+        
+        trade['rank_score'] = self.calculate_rank_score(trade)
         
         self.trades.append(trade)
         self._save_trades()
@@ -285,6 +300,38 @@ class TradeJournal:
             return 'B'
         else:
             return 'C'
+    
+    def calculate_rank_score(self, trade: Dict[str, Any]) -> float:
+        """
+        Calculate rank score for a trade based on key metrics.
+        
+        Args:
+            trade: Trade dictionary
+            
+        Returns:
+            Rank score (0-100)
+        """
+        return (
+            trade.get('trend_score', 0) * 0.4 +
+            trade.get('volume_ratio', 0) * 2 +
+            trade.get('breakout_strength', 0) * 10
+        )
+    
+    def suggest_position_size(self, quality: str) -> float:
+        """
+        Suggest position size multiplier based on trade quality.
+        
+        Args:
+            quality: Trade quality grade (A/B/C)
+            
+        Returns:
+            Position size multiplier (0.0-1.0)
+        """
+        return {
+            'A': 1.0,
+            'B': 0.7,
+            'C': 0.4
+        }.get(quality, 0.5)
     
     def update_trade(
         self,
@@ -338,6 +385,8 @@ class TradeJournal:
                         else:
                             loss = entry - exit_price
                         trade['rr_achieved'] = round(-loss / risk, 2) if risk > 0 else 0
+                    elif outcome == self.OUTCOME_TIMEOUT:
+                        trade['rr_achieved'] = -0.5
                 
                 trade['max_drawdown'] = max_drawdown
                 trade['max_profit'] = max_profit
@@ -492,6 +541,56 @@ class TradeJournal:
             'win_rate': round(win_rate, 2),
             'avg_rr': round(avg_rr, 2)
         }
+    
+    def get_expectancy(self) -> float:
+        """
+        Calculate trade expectancy - the core AI feedback metric.
+        
+        Expectancy = (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
+        
+        Returns:
+            Expectancy value (positive = profitable system)
+        """
+        closed = self.get_closed_trades(limit=1000)
+        
+        wins = [t for t in closed if t.get('outcome') == self.OUTCOME_WIN]
+        losses = [t for t in closed if t.get('outcome') == self.OUTCOME_LOSS]
+        
+        if not closed:
+            return 0.0
+        
+        win_rate = len(wins) / len(closed)
+        
+        avg_win = sum([t.get('rr_achieved', 0) for t in wins]) / len(wins) if wins else 0
+        avg_loss = abs(sum([t.get('rr_achieved', 0) for t in losses]) / len(losses)) if losses else 0
+        
+        return round((win_rate * avg_win) - ((1 - win_rate) * avg_loss), 2)
+    
+    def get_strategy_performance(self) -> Dict[str, Any]:
+        """
+        Get performance metrics by strategy.
+        
+        Returns:
+            Dictionary with per-strategy performance (trades, win_rate, avg_rr)
+        """
+        result = {}
+        
+        for strategy in ['TREND', 'VERC', 'MTF']:
+            trades = self.get_trades_by_strategy(strategy, limit=500)
+            closed = [t for t in trades if t.get('outcome') != self.OUTCOME_OPEN]
+            
+            if not closed:
+                continue
+            
+            wins = [t for t in closed if t.get('outcome') == self.OUTCOME_WIN]
+            
+            result[strategy] = {
+                'trades': len(closed),
+                'win_rate': round(len(wins) / len(closed) * 100, 2),
+                'avg_rr': round(sum(t.get('rr_achieved', 0) for t in closed) / len(closed), 2)
+            }
+        
+        return result
     
     def get_context_stats(self) -> Dict[str, Any]:
         """Get win rate statistics by market context."""

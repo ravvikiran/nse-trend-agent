@@ -89,18 +89,21 @@ class TrendDetector:
     Signal threshold: score >= 6
     """
     
+    MIN_SCORE = 6
+
     def __init__(self):
         """Initialize the TrendDetector."""
+        from indicator_engine import IndicatorEngine
+        self.engine = IndicatorEngine()
         self.alerted_today = set()
         self.last_reset_date = None
     
-    def calculate_trend_score(self, indicators: Dict[str, Any], df: Optional[pd.DataFrame] = None) -> Tuple[int, Dict[str, int]]:
+    def calculate_trend_score(self, indicators: Dict[str, Any]) -> Tuple[int, Dict[str, int]]:
         """
         Calculate trend score based on PRD v2.0 criteria.
         
         Args:
             indicators: Dictionary with indicator values
-            df: DataFrame with price data (optional, for additional checks)
             
         Returns:
             Tuple of (total_score, score_breakdown_dict)
@@ -108,58 +111,76 @@ class TrendDetector:
         score = 0
         breakdown = {}
         
-        from indicator_engine import IndicatorEngine
-        engine = IndicatorEngine()
-        
-        # 1. EMA Alignment (+3)
-        ema_alignment = engine.check_ema_alignment(indicators)
-        breakdown['EMA Alignment'] = 3 if ema_alignment else 0
-        score += breakdown['EMA Alignment']
-        
-        # 2. Fresh Crossover (+2)
-        # Previous: EMA20 <= EMA50, Current: EMA20 > EMA50
+        # EMA Alignment
+        ema_alignment = self.engine.check_ema_alignment(indicators)
+        breakdown['ema_alignment'] = 3 if ema_alignment else 0
+        score += breakdown['ema_alignment']
+
+        # Fresh Crossover
         prev_ema_20 = indicators.get('prev_ema_20', 0)
         prev_ema_50 = indicators.get('prev_ema_50', 0)
         curr_ema_20 = indicators.get('ema_20', 0)
         curr_ema_50 = indicators.get('ema_50', 0)
-        
-        fresh_crossover = (prev_ema_20 <= prev_ema_50) and (curr_ema_20 > curr_ema_50)
-        breakdown['Fresh Crossover'] = 2 if fresh_crossover else 0
-        score += breakdown['Fresh Crossover']
-        
-        # 3. Price Breakout - 20-day high (+2)
-        price_breakout = engine.check_price_breakout(indicators)
-        breakdown['Price Breakout'] = 2 if price_breakout else 0
-        score += breakdown['Price Breakout']
-        
-        # 4. Volume Spike - >=1.5x average (+2)
-        volume_strong, volume_ratio = engine.check_volume_ratio(indicators, min_ratio=1.5)
-        breakdown['Volume Spike'] = 2 if volume_strong else 0
-        score += breakdown['Volume Spike']
-        
-        # Store volume ratio in indicators for later use
-        indicators['volume_ratio'] = volume_ratio
-        
-        # 5. RSI Ideal Zone - 50-65 (+1)
-        rsi_zone, rsi_value = engine.check_rsi_zone(indicators)
+
+        fresh_cross = prev_ema_20 <= prev_ema_50 and curr_ema_20 > curr_ema_50
+        breakdown['fresh_crossover'] = 2 if fresh_cross else 0
+        score += breakdown['fresh_crossover']
+
+        # Breakout
+        breakout = self.engine.check_price_breakout(indicators)
+        breakdown['breakout'] = 2 if breakout else 0
+        score += breakdown['breakout']
+
+        # Volume
+        vol_ok, vol_ratio = self.engine.check_volume_ratio(indicators, min_ratio=1.5)
+        indicators['volume_ratio'] = vol_ratio
+        breakdown['volume'] = 2 if vol_ok else 0
+        score += breakdown['volume']
+
+        # RSI
+        rsi_zone, rsi_val = self.engine.check_rsi_zone(indicators)
         indicators['rsi_zone'] = rsi_zone
-        indicators['rsi_value'] = rsi_value
-        
+        indicators['rsi_value'] = rsi_val
+
         if rsi_zone == 'ideal':
-            breakdown['RSI Ideal'] = 1
+            breakdown['rsi'] = 1
             score += 1
         elif rsi_zone == 'overbought':
-            breakdown['RSI Overbought'] = -1  # Penalty for overbought
+            breakdown['rsi'] = -1
             score -= 1
-        elif rsi_zone == 'weak':
-            breakdown['RSI Weak'] = 0
         else:
-            breakdown['RSI Neutral'] = 0
-        
-        # Ensure minimum score is 0
-        score = max(0, score)
-        
-        return score, breakdown
+            breakdown['rsi'] = 0
+
+        return max(score, 0), breakdown
+    
+    def _rank_signal(self, indicators: Dict[str, Any], score: int) -> float:
+        """
+        Stronger ranking than just score.
+        """
+        vol = indicators.get('volume_ratio', 1)
+        rsi = indicators.get('rsi_value', 50)
+
+        rank = score
+        rank += min(vol, 3)
+        rank += 1 if 50 <= rsi <= 60 else 0
+
+        return round(rank, 2)
+
+    def _validate_signal(self, indicators: Dict[str, Any]) -> bool:
+        """
+        Hard filter (VERY important).
+        """
+        price = indicators.get('close', 0)
+        ema50 = indicators.get('ema_50', 0)
+        vol = indicators.get('volume_ratio', 0)
+
+        if price <= ema50:
+            return False
+
+        if vol < 1.3:
+            return False
+
+        return True
     
     def check_trend_conditions(self, indicators: Dict[str, Any]) -> Dict[str, bool]:
         """
@@ -213,65 +234,45 @@ class TrendDetector:
         Returns:
             TrendSignal if conditions are met, None otherwise
         """
-        if df is None or df.empty:
+        if df is None or len(df) < 50:
             return None
-        
+
         try:
-            try:
-                from indicator_engine import IndicatorEngine
-            except ImportError:
-                from indicator_engine import IndicatorEngine
-            
-            engine = IndicatorEngine()
-            
-            # Calculate indicators
-            df_with_indicators = engine.calculate_indicators(df)
-            
-            if df_with_indicators.empty or len(df_with_indicators) < 2:
-                logger.debug(f"Insufficient data for {ticker}")
+            df = self.engine.calculate_indicators(df)
+            indicators = self.engine.get_latest_indicators(df)
+
+            if not indicators:
                 return None
-            
-            # Get latest indicators
-            indicators = engine.get_latest_indicators(df_with_indicators)
-            
-            if indicators is None:
-                return None
-            
-            # Check if already alerted today
+
             if ticker in self.alerted_today:
-                logger.debug(f"{ticker} already alerted today, skipping")
                 return None
-            
-            # Calculate trend score using PRD v2.0 scoring
-            trend_score, score_breakdown = self.calculate_trend_score(indicators, df)
-            
-            # Store score in indicators
-            indicators['trend_score'] = trend_score
-            indicators['score_breakdown'] = score_breakdown
-            
-            # Log scoring details
-            logger.debug(f"{ticker} - Trend Score: {trend_score}/10, Breakdown: {score_breakdown}")
-            
-            # PRD Signal Rule: trend_signal = score >= 6
-            if trend_score >= 6:
-                # Add to alerted set
-                self.alerted_today.add(ticker)
-                
-                signal = TrendSignal(
-                    ticker=ticker,
-                    timestamp=indicators['timestamp'],
-                    indicators=indicators,
-                    signal_type="TREND",
-                    message=f"TREND Signal - Score: {trend_score}/10"
-                )
-                signal.trend_score = trend_score
-                signal.score_breakdown = score_breakdown
-                return signal
-            
-            return None
-            
+
+            score, breakdown = self.calculate_trend_score(indicators)
+
+            if score < self.MIN_SCORE:
+                return None
+
+            if not self._validate_signal(indicators):
+                return None
+
+            signal = TrendSignal(
+                ticker=ticker,
+                timestamp=indicators['timestamp'],
+                indicators=indicators,
+                signal_type="TREND",
+                message=f"TREND {score}/10"
+            )
+
+            signal.trend_score = score
+            signal.score_breakdown = breakdown
+            signal.rank_score = self._rank_signal(indicators, score)
+
+            self.alerted_today.add(ticker)
+
+            return signal
+
         except Exception as e:
-            logger.error(f"Error analyzing {ticker}: {str(e)}")
+            logger.error(f"{ticker} failed: {e}")
             return None
     
     def analyze_multiple_stocks(self, stocks_data: Dict[str, pd.DataFrame]) -> List[TrendSignal]:
@@ -289,16 +290,14 @@ class TrendDetector:
 
         
         for ticker, df in stocks_data.items():
-            try:
-                signal = self.analyze_stock(df, ticker)
-                if signal:
-                    signals.append(signal)
+            signal = self.analyze_stock(df, ticker)
+            if signal:
+                signals.append(signal)
 
-            except Exception as e:
-                logger.error(f"Error analyzing {ticker}: {str(e)}")
-        
+        # sort by rank, not just score
+        signals.sort(key=lambda x: x.rank_score, reverse=True)
 
-        return signals
+        return signals[:10]
     
     def analyze_multiple_stocks_with_scans(self, stocks_data: Dict[str, pd.DataFrame]) -> ScanResult:
         """
@@ -338,7 +337,7 @@ class TrendDetector:
                     continue
                 
                 # Calculate trend score
-                trend_score, score_breakdown = self.calculate_trend_score(indicators, df)
+                trend_score, score_breakdown = self.calculate_trend_score(indicators)
                 indicators['trend_score'] = trend_score
                 indicators['score_breakdown'] = score_breakdown
                 

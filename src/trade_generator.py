@@ -132,14 +132,105 @@ class TradeSetupGenerator:
     - Multiple target levels with R:R ratios
     - Risk level classification
     - Time estimates based on ATR
+    - Strict validation filters for quality setups
     """
     
     DEFAULT_STOP_LOSS_PCT = 2.0
     BREAKOUT_THRESHOLD = 0.5
     
+    MIN_SL = 2.0
+    MAX_SL = 3.0
+    MIN_TARGET = 5.0
+    MAX_TARGET = 10.0
+    MIN_RR = 2.0
+    
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
         self.default_sl_pct = self.config.get('default_stop_loss_pct', self.DEFAULT_STOP_LOSS_PCT)
+    
+    def generate(self, signal: Any, data: Dict[str, Any]) -> Optional[TradeSetup]:
+        """
+        Generate a trade setup from a signal with strict validation.
+        
+        Args:
+            signal: Signal object (VERCSignal, TrendSignal, CombinedSignal)
+            data: Dictionary with price and indicator data
+            
+        Returns:
+            TradeSetup object or None if validation fails
+        """
+        try:
+            price = data.get("close", data.get("current_price", 0))
+            if price <= 0:
+                return None
+
+            stock_symbol = getattr(signal, "stock_symbol", getattr(signal, "ticker", "UNKNOWN"))
+            signal_type = getattr(signal, "signal_type", getattr(signal, "type", "TREND"))
+            
+            range_low = data.get("range_low", price * 0.98)
+            range_high = data.get("range_high", price * 1.02)
+            ema_50 = data.get("ema_50", data.get("ema50", price))
+            
+            support = min(range_low, ema_50 * 0.98)
+            resistance = range_high
+
+            entry_strategy, entry_min, entry_max = self._entry(price, resistance)
+
+            sl = support * 0.98
+            sl_pct = self._pct(price, sl)
+
+            if not (self.MIN_SL <= sl_pct <= self.MAX_SL):
+                return None
+
+            target_1 = price * 1.05
+            target_2 = price * 1.08
+
+            t1_pct = self._pct(target_1, price)
+            t2_pct = self._pct(target_2, price)
+
+            rr1 = self._rr(price, sl, target_1)
+            rr2 = self._rr(price, sl, target_2)
+
+            if rr1 < self.MIN_RR:
+                return None
+
+            confidence = self._confidence(signal, data)
+
+            positives, negatives = self._factors(data, price, resistance)
+
+            return TradeSetup(
+                stock_symbol=stock_symbol,
+                signal_type=signal_type,
+                timestamp=datetime.now(),
+                current_price=price,
+                entry_min=round(entry_min, 2),
+                entry_max=round(entry_max, 2),
+                entry_strategy=entry_strategy,
+                stop_loss=round(sl, 2),
+                stop_loss_pct=round(sl_pct, 2),
+                risk_level=self._risk(sl_pct),
+                target_1=round(target_1, 2),
+                target_1_pct=round(t1_pct, 2),
+                target_1_rr=round(rr1, 2),
+                target_1_distance=round(target_1 - price, 2),
+                target_2=round(target_2, 2),
+                target_2_pct=round(t2_pct, 2),
+                target_2_rr=round(rr2, 2),
+                target_2_distance=round(target_2 - price, 2),
+                range_low=round(range_low, 2),
+                range_high=round(range_high, 2),
+                range_height=round(range_high - range_low, 2),
+                support_level=round(support, 2),
+                resistance_level=round(resistance, 2),
+                near_breakout=((resistance - price) / price) * 100 < 1,
+                breakout_distance_pct=round(((resistance - price) / price) * 100, 2),
+                confidence=confidence,
+                positive_factors=positives,
+                negative_factors=negatives
+            )
+        except Exception as e:
+            logger.error(f"Error generating trade setup: {e}")
+            return None
     
     def generate_from_signal(self, signal: Any, price_data: Dict[str, Any]) -> TradeSetup:
         """
@@ -410,6 +501,59 @@ class TradeSetupGenerator:
             msg += f"\n💡 *AI Insight:*\n{trade_setup.ai_reasoning[:200]}..."
         
         return msg
+
+    def _entry(self, price, resistance):
+        dist_pct = ((resistance - price) / price) * 100
+
+        if dist_pct <= 0.5:
+            return "BREAKOUT", resistance, resistance * 1.005
+        return "PULLBACK", price, price * 1.01
+
+    def _pct(self, a, b):
+        return abs((a - b) / b) * 100
+
+    def _rr(self, entry, sl, target):
+        risk = abs(entry - sl)
+        reward = abs(target - entry)
+        return reward / risk if risk > 0 else 0
+
+    def _risk(self, sl_pct):
+        if sl_pct <= 2:
+            return "LOW"
+        if sl_pct <= 3:
+            return "MEDIUM"
+        return "HIGH"
+
+    def _confidence(self, signal, data):
+        score = getattr(signal, "trend_score", getattr(signal, "confidence", 5))
+
+        if data.get("volume_ratio", 1) > 1.5:
+            score += 1
+        if 50 <= data.get("rsi", 50) <= 65:
+            score += 1
+
+        return min(10, int(score))
+
+    def _factors(self, data, price, resistance):
+        pos, neg = [], []
+
+        if data.get("volume_ratio", 1) > 1.3:
+            pos.append("Volume expansion")
+
+        if 50 <= data.get("rsi", 50) <= 65:
+            pos.append("RSI ideal zone")
+
+        dist = ((resistance - price) / price) * 100
+        if dist < 1:
+            pos.append("Near breakout")
+
+        if data.get("rsi", 50) > 70:
+            neg.append("Overbought")
+
+        if data.get("volume_ratio", 1) < 1:
+            neg.append("Low volume")
+
+        return pos, neg
 
 
 def create_trade_generator(config: Optional[Dict[str, Any]] = None) -> TradeSetupGenerator:
