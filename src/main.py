@@ -139,17 +139,18 @@ class NSETrendScanner:
             stocks=self.stocks
         )
         
-        # Trade Journal & Performance (must be initialized before scheduler uses it)
-        self.trade_journal = create_trade_journal()
-        self.scheduler.set_trade_journal(self.trade_journal)
-        self.scheduler.set_alert_service(self.alert_service)
-        
         # ==================== NEW: Reasoning + Learning Components ====================
         # History Manager - stores signal data
         self.history_manager = create_history_manager()
         
-        # Signal Tracker - monitors active signals
-        self.signal_tracker = create_signal_tracker(self.history_manager, self.data_fetcher)
+        # ==================== Trade Journal & Performance ====================
+        # Must be initialized BEFORE SignalTracker (which uses it)
+        self.trade_journal = create_trade_journal()
+        self.scheduler.set_trade_journal(self.trade_journal)
+        self.scheduler.set_alert_service(self.alert_service)
+        
+        # Signal Tracker - monitors active signals (requires trade_journal for journal updates)
+        self.signal_tracker = create_signal_tracker(self.history_manager, self.data_fetcher, self.trade_journal)
         
         # Performance Tracker - calculates SIQ scores
         self.performance_tracker = create_performance_tracker(self.history_manager)
@@ -277,6 +278,15 @@ class NSETrendScanner:
                 with open(settings_path, 'r') as f:
                     self.settings = json.load(f)
                 logger.info("Settings loaded from config/settings.json")
+                
+                token = self.settings.get('telegram', {}).get('bot_token', '')
+                if token:
+                    env_token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+                    if token != env_token:
+                        logger.warning(
+                            "Telegram token found in settings.json — "
+                            "prefer using TELEGRAM_BOT_TOKEN env var to avoid credential leak"
+                        )
             except Exception as e:
                 logger.error(f"Error loading settings: {e}")
                 self.settings = {}
@@ -510,6 +520,11 @@ Loss: -{loss_pct:.1f}%
         ist = pytz.timezone('Asia/Kolkata')
         now = datetime.now(ist)
         today = now.date()
+        
+        # Skip on weekends
+        if now.weekday() >= 5:
+            logger.info("Weekend - skipping signal generation")
+            return
         
         if self._last_signal_date != today:
             self._signals_sent_today = 0
@@ -749,6 +764,11 @@ Loss: -{loss_pct:.1f}%
         """
         Run the Multi-Timeframe Strategy.
         Fetches 1D, 1H, 15m data and validates all conditions.
+        
+        Now includes proper deduplication checks:
+        - previous_signals (in-memory)
+        - signal_memory.is_duplicate()
+        - trade_journal.check_signal_exists()
         """
         try:
             # Get strategy setting
@@ -796,6 +816,20 @@ Loss: -{loss_pct:.1f}%
             for signal in mtf_signals:
                 signal_key = f"MTF:{signal.ticker}"
                 current_signals.add(signal_key)
+                
+                # Skip if already in previous_signals (in-memory)
+                if signal_key in self.previous_signals:
+                    continue
+                
+                # Skip if in signal_memory (persistent dedup)
+                if self.signal_memory.is_duplicate(signal.ticker, 'MTF'):
+                    logger.info(f"Skipping MTF {signal.ticker}: in signal memory")
+                    continue
+                
+                # Skip if in trade journal (persisted)
+                if self.trade_journal.check_signal_exists(signal.ticker, 'MTF'):
+                    logger.info(f"Skipping MTF {signal.ticker}: exists in trade journal")
+                    continue
                 
                 if signal_key not in self.previous_signals:
                     try:
@@ -1034,10 +1068,8 @@ Loss: -{loss_pct:.1f}%
         Calculate rank score per PRD v2.0 formula:
         base_rank_score = (strategy_score * 0.6) + (volume_score * 0.2) + (breakout_strength * 0.2)
         
-        Then add strategy_weight for ranking priority:
-        final_rank_score = base_rank_score + (strategy_weight * 0.5)
-        
-        DO NOT multiply base score by weight - this contaminates the scoring.
+        Score is PURE - strategy_weight only affects sort order, not the numeric score.
+        Sorting is done separately by (strategy_weight, rank_score) in _run_all_strategies.
         """
         strategy_score = signal.strategy_score
         
@@ -1047,14 +1079,9 @@ Loss: -{loss_pct:.1f}%
         
         base_rank_score = (strategy_score * 0.6) + (volume_score * 0.2) + (breakout_strength * 0.2)
         
-        strategy_type = getattr(signal, 'strategy_type', 'TREND')
-        strategy_weight = self.strategy_optimizer.strategy_weights.get(strategy_type, 0.5)
-        
         signal.base_rank_score = round(base_rank_score, 2)
         
-        final_rank_score = base_rank_score + (strategy_weight * 0.5)
-        
-        return round(final_rank_score, 2)
+        return round(base_rank_score, 2)
     
     def _calculate_breakout_strength(self, indicators) -> float:
         """Calculate % above 20-day high."""
@@ -1176,7 +1203,6 @@ Loss: -{loss_pct:.1f}%
             "",
             f"Stock: {signal.stock_symbol}",
             f"Time: {now.strftime('%Y-%m-%d %H:%M')} IST",
-            f"Timeframe: 1D",
             "",
             f"💰 Current Price: ₹{signal.current_price:.2f}",
             "",
@@ -1228,21 +1254,8 @@ Loss: -{loss_pct:.1f}%
             self.total_signals += 1
     
     def _send_no_signals_message(self):
-        """Send a message when no signals are found."""
-        from datetime import datetime
-        
-        ist = pytz.timezone('Asia/Kolkata')
-        now = datetime.now(ist)
-        
-        message = (
-            "📊 Daily Scan Complete\n"
-            f"Time: {now.strftime('%Y-%m-%d %H:%M')}\n"
-            f"Timeframe: 1D\n"
-            "\n"
-            "No signals today.\n"
-            "Markets may be consolidating."
-        )
-        self.alert_service.send_alert(message)
+        """Log when no signals are found. No notification sent."""
+        logger.info("No signals found in this scan")
     
     def _calculate_trade_status(self, trade: Dict, current_price: float) -> str:
         """Calculate trade status based on current price."""
@@ -1638,7 +1651,11 @@ Loss: -{loss_pct:.1f}%
             return None, None
     
     def _estimate_time_to_target(self, current_price, target_price, atr):
-        """Estimate time to reach target based on ATR."""
+        """Estimate time to reach target based on ATR.
+        
+        Note: ATR is the average RANGE of a candle, not directional daily move.
+        Only ~35% of ATR represents actual directional progress.
+        """
         if atr is None or atr <= 0 or current_price <= 0:
             return "Unknown"
         
@@ -1646,7 +1663,8 @@ Loss: -{loss_pct:.1f}%
         if price_diff == 0:
             return "Already at target"
         
-        days_estimate = price_diff / atr
+        expected_daily_progress = atr * 0.35
+        days_estimate = price_diff / expected_daily_progress
         
         if days_estimate <= 1:
             return "< 1 day"
@@ -1819,7 +1837,10 @@ Loss: -{loss_pct:.1f}%"""
     
     def _track_trend_signal(self, signal):
         """
-        Track a Trend signal in the learning system.
+        Track a Trend signal in the learning system (factor analysis only).
+        
+        Note: Journal write happens in _send_new_signal_alert or _process_signal,
+        not here - this avoids duplicate writes inflating stats.
         
         Args:
             signal: TrendSignal object
@@ -1842,26 +1863,6 @@ Loss: -{loss_pct:.1f}%"""
             quality = getattr(signal, 'quality', 'B')
             market_context = getattr(signal, 'market_context', 'BULLISH')
             breakout_strength = getattr(signal, 'breakout_strength', 0)
-            
-            self.trade_journal.log_signal(
-                symbol=signal.ticker,
-                strategy='TREND',
-                direction="BUY",
-                entry=entry,
-                stop_loss=stop_loss,
-                targets=targets,
-                indicators={
-                    'volume_ratio': signal.volume_ratio if hasattr(signal, 'volume_ratio') else indicators.get('volume_ratio', 0),
-                    'rsi': indicators.get('rsi_value', 0) or indicators.get('rsi', 0),
-                    'trend_score': signal.trend_score if hasattr(signal, 'trend_score') else indicators.get('trend_score', 0),
-                    'rank_score': signal.rank_score if hasattr(signal, 'rank_score') else 0,
-                    'candle_quality': 'NORMAL'
-                },
-                quality=quality,
-                market_context=market_context,
-                entry_type='BREAKOUT',
-                breakout_strength=breakout_strength
-            )
             
             self.factor_analyzer.analyze_trade({
                 'symbol': signal.ticker,
@@ -1890,7 +1891,10 @@ Loss: -{loss_pct:.1f}%"""
     
     def _track_verc_signal(self, signal):
         """
-        Track a VERC signal in the learning system.
+        Track a VERC signal in the learning system (factor analysis only).
+        
+        Note: Journal write happens in _send_new_signal_alert or _process_signal,
+        not here - this avoids duplicate writes inflating stats.
         
         Args:
             signal: VERCSignal object
@@ -1903,26 +1907,6 @@ Loss: -{loss_pct:.1f}%"""
             
             quality = getattr(signal, 'quality', 'B')
             market_context = getattr(signal, 'market_context', 'BULLISH')
-            
-            self.trade_journal.log_signal(
-                symbol=signal.stock_symbol,
-                strategy='VERC',
-                direction="BUY",
-                entry=entry,
-                stop_loss=stop_loss,
-                targets=targets,
-                indicators={
-                    'volume_ratio': signal.relative_volume if hasattr(signal, 'relative_volume') else 0,
-                    'rsi': 0,
-                    'verc_score': signal.confidence_score if hasattr(signal, 'confidence_score') else 0,
-                    'rank_score': signal.rank_score if hasattr(signal, 'rank_score') else 0,
-                    'candle_quality': 'NORMAL'
-                },
-                quality=quality,
-                market_context=market_context,
-                entry_type='BREAKOUT',
-                breakout_strength=0
-            )
             
             self.factor_analyzer.analyze_trade({
                 'symbol': signal.stock_symbol,
@@ -2188,6 +2172,11 @@ Next scan in 15 minutes."""
         
         ist = pytz.timezone('Asia/Kolkata')
         now = datetime.now(ist)
+        
+        # Skip on weekends
+        if now.weekday() >= 5:
+            logger.info("Weekend - skipping periodic scan")
+            return
         
         logger.info("Running periodic scan (15 min interval)...")
         

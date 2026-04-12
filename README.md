@@ -29,17 +29,26 @@ Automated trading scanner that monitors ~500 NSE stocks during market hours and 
 - **No-Trade Filter**: Avoids signals when ATR too low, choppy candles, or NIFTY unclear
 - **AI Learning Layer** (Strict Mode): Analyzes journal, detects failure patterns, suggests improvements
 
+### Additional Features (v2.1)
+
+- **Performance Analyzer**: Setup-level analysis with win rate, returns, profit factor
+- **Position Manager**: Trailing SL, partial exits at T1/T2
+- **Market Context**: ATR-based detection with volatility regimes (LOW/NORMAL/HIGH)
+- **Weekend Skip**: No signal generation on weekends
+
 ## System Flow
 
 ```
 Scan → Detect → Score → Rank → Select → Alert → Log → Track → Optimize
 ```
 
-### Rank Score Formula
+### Rank Score Formula (v2.1 - PURE Scoring)
 
 ```
-rank_score = (strategy_score * strategy_weight * 0.6) + (volume_score * 0.2) + (breakout_strength * 0.2)
+rank_score = (strategy_score * 0.6) + (volume_score * 0.2) + (breakout_strength * 0.2)
 ```
+
+**Note:** Score is PURE - strategy_weight only affects sorting/ranking, not the numeric score.
 
 ## Installation
 

@@ -1,7 +1,7 @@
 # NSE Trend Scanner Agent - System Validation Document
 
-**Version:** 2.0  
-**Date:** 2026-04-09  
+**Version:** 2.1  
+**Date:** 2026-04-12  
 **Purpose:** Comprehensive system documentation for AI validation and review
 
 ---
@@ -43,10 +43,15 @@ The system includes:
 nse-trend-agent/
 ├── config/
 │   ├── settings.json          # Scanner configuration
+│   ├── settings.example.json  # Example settings template
 │   └── stocks.json          # Stock list (~750 NSE symbols)
 ├── data/
 │   ├── memory_all_signals.json
 │   ├── trade_journal.json
+│   ├── signals_active.json
+│   ├── signals_history.json
+│   ├── performance_metrics.json
+│   ├── market_context.json
 │   └── ...
 ├── src/
 │   ├── main.py              # Entry point and scanner orchestration
@@ -61,14 +66,17 @@ nse-trend-agent/
 │   ├── market_scheduler.py # Market hours scheduling
 │   ├── signal_memory.py    # Signal deduplication
 │   ├── signal_tracker.py   # Active signal tracking
-│   ├── history_manager.py # History persistence
+│   ├── history_manager.py # History persistence (v2.0 - includes PerformanceAnalyzer, PositionManager, MultiTimeframeValidator)
 │   ├── performance_tracker.py # SIQ metrics
 │   ├── notification_manager.py # Outcome notifications
 │   ├── trade_journal.py  # Trade logging
+│   ├── trade_validator.py  # Trade setup validation
 │   ├── strategy_optimizer.py # Performance optimization
 │   ├── ai_learning_layer.py # AI pattern analysis
 │   ├── factor_analyzer.py   # Factor-level learning (v2.0)
-│   ├── market_context.py    # Market context engine (v2.0)
+│   ├── market_context.py    # Market context engine (v2.0 - enhanced ATR-based detection, volatility regimes)
+│   ├── signal_scorer.py   # Signal scoring utilities
+│   ├── consolidation_detector.py # Consolidation detection
 │   └── scheduler/
 │       └── scanner_scheduler.py
 ├── logs/
@@ -264,24 +272,52 @@ final_ranking = sorted(signals, key=(strategy_weight, rank_score), reverse=True)
 
 ### 4.8 Market Context Engine (`src/market_context.py`)
 
-**Purpose:** Detects NIFTY trend for context-aware filtering
+**Purpose:** Detects NIFTY trend for context-aware filtering with ATR-based detection, structure analysis, and regime classification.
 
-**Context Detection Rules:**
+**Enhanced Context Detection (v2.0):**
 
 | Context | Condition |
 |---------|-----------|
-| BULLISH | price > EMA50 × 1.02 |
-| BEARISH | price < EMA50 × 0.98 |
-| SIDEWAYS | otherwise (within 2% of EMA50) |
+| STRONG_BULLISH | Close > 20-day high × 1.01 AND > EMA50 + 1.5×ATR |
+| BULLISH | Close > EMA50 + 1.5×ATR |
+| SIDEWAYS | Within ATR bounds, low persistence, or volatility regime = LOW |
+| BEARISH | Close < EMA50 - 1.5×ATR |
+| STRONG_BEARISH | Close < 20-day low × 0.99 AND < EMA50 - 1.5×ATR |
+
+**Volatility Regime Classification:**
+
+| Regime | Condition |
+|--------|-----------|
+| LOW | ATR ratio < 0.5× average |
+| NORMAL | 0.5× to 1.5× average |
+| HIGH | ATR ratio > 1.5× average |
+
+**Context Flip Detection:**
+- Detects whipsaw (context flip < 3 periods)
+- Defaults to SIDEWAYS during flip periods
+
+**Context Persistence:**
+- Tracks consecutive periods with same context
+- Score boost (+10%) when persistence >= 5
 
 **Strategy-Aware Rules:**
 
 | Strategy | BULLISH | SIDEWAYS | BEARISH |
-|----------|---------|----------|---------|
-| TREND | Full scoring | Reject weak (score < 6) | -1 penalty |
-| VERC | Full scoring | Full scoring (VERC thrives in sideways) | Full scoring |
+|----------|--------|----------|---------|
+| TREND | Full scoring + boost | Reject | -2 penalty |
+| VERC | Full scoring | Full scoring | Full scoring |
+| SHORT | -2 penalty | -0.5 reduction | +1 boost |
+
+**High Volatility:**
+- Score reduced by 40% when volatility_regime = HIGH
 
 **Output:** `data/market_context.json`
+
+**Key Methods:**
+- `detect_context()` - ATR-based detection with structure analysis
+- `apply_context_rules()` - Context-aware scoring adjustments
+- `get_context_stats()` - Returns persistence, volatility, recent flips
+- `get_nifty_indicators()` - Returns EMA, ATR, volatility metrics
 
 ### 4.9 Adaptive Thresholds (`src/strategy_optimizer.py`)
 
@@ -302,6 +338,60 @@ final_ranking = sorted(signals, key=(strategy_weight, rank_score), reverse=True)
 - Weak breakouts → breakout_strength_min += 1%
 
 **Cooldown:** Updates restricted to once per day
+
+### 4.9.1 PerformanceAnalyzer (`src/history_manager.py`)
+
+**Purpose:** Analyzes historical signal performance to learn and improve. Tracks win rate, returns, best parameters per setup.
+
+**Key Methods:**
+- `analyze_all_setups()` - Returns performance metrics per setup configuration
+- `generate_weight_adjustments()` - Auto-adjusts weights based on performance (>60% boost, <40% disable)
+
+**Metrics Calculated:**
+| Metric | Description |
+|--------|-------------|
+| win_rate | (Wins / Total) × 100 |
+| avg_return_pct | Mean return % |
+| best_return_pct | Maximum return |
+| worst_return_pct | Minimum return |
+| avg_rr | Average risk-reward |
+| max_drawdown_pct | Peak-to-trough decline |
+| profit_factor | Gross profit / Gross loss |
+
+**Constraints:**
+- Minimum 10 trades required for reliable stats
+
+### 4.9.2 PositionManager (`src/history_manager.py`)
+
+**Purpose:** Manages open positions with trailing SL, partial exits, and close on opposite signal.
+
+**Features:**
+- Opening positions from signals
+- Trailing stop calculation (1% default)
+- Partial exits at T1 (50%), T2 (75%)
+- Close on opposite signal detection
+
+**Key Methods:**
+- `open_position()` - Create position from signal
+- `update_position()` - Check exit conditions
+- `close_on_opposite_signal()` - Close when reverse signal detected
+
+### 4.9.3 MultiTimeframeValidator (`src/history_manager.py`)
+
+**Purpose:** Validates signals across multiple timeframes (Daily trend, 1H structure, 15m entry).
+
+**Validation Rules:**
+| Timeframe | Check | Action |
+|-----------|-------|--------|
+| Daily | Trend vs signal direction | Opposite = REJECT |
+| 1H | Structure (RANGE_BOUND) | Reduce confidence 30% |
+| 15m | Volatility (EXTREME) | Reduce confidence 20% |
+
+**Returns:**
+- `valid` (bool)
+- `confidence` (0.0-1.0)
+- `filters_triggered` (list)
+- `recommendation` (APPROVE/CAUTION/REJECT)
 
 ### 4.10 No-Trade Zone Filter (`src/main.py`)
 
@@ -950,11 +1040,43 @@ python -m src.main --enable-telegram-bot
 
 ---
 
+## 18. v2.1 Upgrade Features (2026-04-12)
+
+### 18.1 History Manager Enhancements
+
+| Feature | Description |
+|---------|-------------|
+| PerformanceAnalyzer | Analyzes setups, calculates win rate, returns, profit factor |
+| PositionManager | Trailing SL, partial exits at T1/T2 |
+| MultiTimeframeValidator | Daily/1H/15m validation |
+| TradeSetup | Entry, SL, targets, RR validation |
+
+### 18.2 Market Context Enhancements
+
+| Feature | Description |
+|---------|-------------|
+| ATR-based detection | Uses ATR × multiplier bounds instead of % |
+| Volatility regimes | LOW/NORMAL/HIGH classification |
+| Context flip detection | Whipsaw filter |
+| Context persistence | Score boost when >= 5 periods |
+| STRONG_BULLISH/BEARISH | Strong momentum contexts |
+
+### 18.3 Main.py Enhancements
+
+| Feature | Description |
+|---------|-------------|
+| Weekend skip | No signals on weekends |
+| Telegram security | Warning when token in config |
+| MTF deduplication | Additional dedup checks (memory, signal_memory, journal) |
+| PURE ranking | Strategy weight only affects sort order |
+
+---
+
 ## 16. Disclaimer
 
 This software is for **educational purposes only**. Trading in financial markets involves substantial risk. Always do your own research. Past performance does not guarantee future results.
 
 ---
 
-**Document Version:** 2.0  
-**Last Updated:** 2026-04-09
+**Document Version:** 2.1  
+**Last Updated:** 2026-04-12

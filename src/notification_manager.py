@@ -120,6 +120,73 @@ Stop-loss triggered. Cut loss and move on. 📉
         else:
             return self._send_notification(f"Signal completed: {outcome}", "COMPLETED")
     
+    def notify_new_signal(self, signal: Dict[str, Any]) -> bool:
+        """
+        Send formatted notification for a new trade signal.
+        
+        Args:
+            signal: Signal data with setup details
+            
+        Returns:
+            True if sent successfully
+        """
+        stock = signal.get('stock_symbol', 'Unknown')
+        direction = signal.get('direction', 'BUY').upper()
+        entry = signal.get('entry_price', 0)
+        sl = signal.get('stop_loss', 0)
+        t1 = signal.get('target_1', 0)
+        t2 = signal.get('target_2', 0)
+        rr1 = signal.get('risk_reward_1', 0)
+        rr2 = signal.get('risk_reward_2', 0)
+        
+        emoji = "🔥" if direction == "BUY" else "📉"
+        context = "BULLISH" if direction == "BUY" else "BEARISH"
+        
+        message = f"""
+{emoji} {direction} TRADE ALERT
+
+Stock: {stock}
+Context: {context}
+Entry: ₹{entry:.2f}
+SL: ₹{sl:.2f}
+Target 1: ₹{t1:.2f} (1:{rr1:.1f})
+Target 2: ₹{t2:.2f} (1:{rr2:.1f})
+
+Why:
+"""
+        
+        reasons = []
+        if signal.get('ema_aligned') in ['BULLISH', 'STRONG_BULLISH'] and direction == 'BUY':
+            reasons.append("✔ EMA aligned")
+        elif signal.get('ema_aligned') in ['BEARISH', 'STRONG_BEARISH'] and direction == 'SELL':
+            reasons.append("✔ EMA aligned")
+        
+        vol_ratio = signal.get('volume_ratio', 0)
+        if vol_ratio >= 1.5:
+            reasons.append(f"✔ Volume spike ({vol_ratio:.1f}x)")
+        
+        if signal.get('breakout_strength', 0) >= 5:
+            reasons.append("✔ Breakout confirmed")
+        
+        if signal.get('signal_type') == 'BREAKOUT':
+            reasons.append("✔ Strong breakout")
+        
+        if signal.get('trend') == 'BULLISH' and direction == 'BUY':
+            reasons.append("✔ Market supportive")
+        elif signal.get('trend') == 'BEARISH' and direction == 'SELL':
+            reasons.append("✔ Market supportive")
+        
+        if reasons:
+            message += "\n".join(reasons)
+        else:
+            message += "  • Setup identified"
+        
+        score = signal.get('score') or signal.get('confidence', 0)
+        if score:
+            message += f"\n\nConfidence: {score}%"
+        
+        return self._send_notification(message, "NEW_SIGNAL")
+    
     def notify_outcome_batch(self, completed_signals: List[Dict[str, Any]]) -> bool:
         """
         Send batch notification for multiple completed signals.

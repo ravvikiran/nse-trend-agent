@@ -1,13 +1,14 @@
 """
 Market Context Engine
 Detects NIFTY trend (BULLISH/BEARISH/SIDEWAYS) for context-aware filtering.
+Enhanced with ATR-based detection, structure analysis, and regime classification.
 """
 
 import os
 import json
 import logging
-from datetime import datetime
-from typing import Dict, Any, Optional, Tuple
+from datetime import datetime, timedelta
+from typing import Dict, Any, Optional, Tuple, List
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,10 @@ class MarketContextEngine:
     CONTEXT_FILE = 'market_context.json'
     NIFTY_SYMBOL = '^NSEI'
     
+    CONTEXT_TTL_MINUTES = 15
+    VOLATILITY_LOW_MULTIPLIER = 0.5
+    VOLATILITY_HIGH_MULTIPLIER = 1.5
+    
     def __init__(self, data_fetcher=None, data_dir: str = DATA_DIR):
         self.data_fetcher = data_fetcher
         self.data_dir = data_dir
@@ -30,6 +35,8 @@ class MarketContextEngine:
         
         self.current_context = 'SIDEWAYS'
         self.context_history = []
+        self.last_context_update = None
+        self.volatility_regime = 'NORMAL'
         self._load_context()
         
         logger.info("MarketContextEngine initialized")
@@ -42,6 +49,8 @@ class MarketContextEngine:
                     data = json.load(f)
                     self.current_context = data.get('current_context', 'SIDEWAYS')
                     self.context_history = data.get('history', [])
+                    self.last_context_update = data.get('last_updated')
+                    self.volatility_regime = data.get('volatility_regime', 'NORMAL')
             except Exception as e:
                 logger.error(f"Error loading market context: {e}")
     
@@ -50,7 +59,8 @@ class MarketContextEngine:
         data = {
             'current_context': self.current_context,
             'history': self.context_history[-30:],
-            'last_updated': datetime.now().isoformat()
+            'last_updated': datetime.now().isoformat(),
+            'volatility_regime': self.volatility_regime
         }
         try:
             with open(filepath, 'w') as f:
@@ -72,12 +82,30 @@ class MarketContextEngine:
             if df is None or df.empty:
                 return None
             
+            close = df['close'].iloc[-1]
+            ema50 = df['close'].ewm(span=50).mean().iloc[-1]
+            ema20 = df['close'].ewm(span=20).mean().iloc[-1]
+            atr = self._calculate_atr(df)
+            atr_percent = atr / close * 100 if close > 0 else 0
+            
+            high_20 = df['high'].tail(20).max()
+            low_20 = df['low'].tail(20).min()
+            
+            ema_slope = ((ema50 - ema20) / ema20 * 100) if ema20 > 0 else 0
+            
+            avg_atr = self._calculate_avg_atr(df, lookback=20)
+            volatility_regime = self._classify_volatility_regime(atr_percent, avg_atr)
+            
             return {
-                'close': df['close'].iloc[-1],
-                'ema50': df['close'].ewm(span=50).mean().iloc[-1],
-                'high': df['high'].tail(20).max(),
-                'low': df['low'].tail(20).min(),
-                'atr': self._calculate_atr(df)
+                'close': close,
+                'ema50': ema50,
+                'ema20': ema20,
+                'atr': atr,
+                'atr_percent': atr_percent,
+                'high_20': high_20,
+                'low_20': low_20,
+                'ema_slope': ema_slope,
+                'volatility_regime': volatility_regime
             }
         except Exception as e:
             logger.error(f"Error fetching NIFTY data: {e}")
@@ -86,6 +114,7 @@ class MarketContextEngine:
     def _calculate_atr(self, df, period: int = 14) -> float:
         """Calculate ATR for NIFTY."""
         try:
+            import pandas as pd
             high = df['high']
             low = df['low']
             close = df['close']
@@ -101,50 +130,176 @@ class MarketContextEngine:
         except Exception:
             return 0.0
     
-    def detect_context(self) -> str:
+    def _calculate_avg_atr(self, df, lookback: int = 20) -> float:
+        """Calculate average ATR over lookback period."""
+        try:
+            import pandas as pd
+            high = df['high']
+            low = df['low']
+            close = df['close']
+            
+            tr1 = high - low
+            tr2 = abs(high - close.shift(1))
+            tr3 = abs(low - close.shift(1))
+            
+            tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+            avg_tr = tr.rolling(window=lookback).mean().iloc[-1]
+            
+            return float(avg_tr)
+        except Exception:
+            return 0.0
+    
+    def _classify_volatility_regime(self, current_atr_percent: float, avg_atr_percent: float) -> str:
+        """Classify volatility regime based on ATR."""
+        if avg_atr_percent == 0:
+            return 'NORMAL'
+        
+        ratio = current_atr_percent / avg_atr_percent if avg_atr_percent > 0 else 1.0
+        
+        if ratio < self.VOLATILITY_LOW_MULTIPLIER:
+            return 'LOW'
+        elif ratio > self.VOLATILITY_HIGH_MULTIPLIER:
+            return 'HIGH'
+        else:
+            return 'NORMAL'
+    
+    def _detect_context_with_structure(self, nifty_data: Dict[str, Any]) -> Tuple[str, str]:
+        """
+        Detect market context using ATR-based detection and structure analysis.
+        
+        Returns:
+            Tuple of (context, strength)
+        """
+        close = nifty_data.get('close', 0)
+        ema50 = nifty_data.get('ema50', 0)
+        atr = nifty_data.get('atr', 1)
+        high_20 = nifty_data.get('high_20', 0)
+        low_20 = nifty_data.get('low_20', 0)
+        ema_slope = nifty_data.get('ema_slope', 0)
+        volatility_regime = nifty_data.get('volatility_regime', 'NORMAL')
+        
+        if ema50 <= 0 or atr <= 0:
+            return 'SIDEWAYS', 'WEAK'
+        
+        upper_bound = ema50 + (1.5 * atr)
+        lower_bound = ema50 - (1.5 * atr)
+        
+        breakout_above = close > high_20 * 1.01
+        breakout_below = close < low_20 * 0.99
+        
+        if breakout_above and close > ema50:
+            context = 'STRONG_BULLISH'
+            strength = 'STRONG'
+        elif breakout_below and close < ema50:
+            context = 'STRONG_BEARISH'
+            strength = 'STRONG'
+        elif close > upper_bound:
+            context = 'BULLISH'
+            strength = 'MODERATE'
+        elif close < lower_bound:
+            context = 'BEARISH'
+            strength = 'MODERATE'
+        elif volatility_regime == 'LOW':
+            context = 'SIDEWAYS'
+            strength = 'WEAK'
+        else:
+            if ema_slope > 0.5:
+                context = 'BULLISH'
+                strength = 'WEAK'
+            elif ema_slope < -0.5:
+                context = 'BEARISH'
+                strength = 'WEAK'
+            else:
+                context = 'SIDEWAYS'
+                strength = 'MODERATE'
+        
+        return context, strength
+    
+    def _get_context_persistence(self) -> int:
+        """Get number of consecutive periods with same context."""
+        if not self.context_history:
+            return 1
+        
+        count = 1
+        current = self.current_context
+        
+        for i in range(len(self.context_history) - 1, -1, -1):
+            if self.context_history[i].get('to') == current:
+                count += 1
+            else:
+                break
+        
+        return count
+    
+    def _detect_context_flip(self) -> bool:
+        """Detect if context recently flipped (whipsaw)."""
+        if len(self.context_history) < 2:
+            return False
+        
+        last_two = self.context_history[-2:]
+        if len(last_two) < 2:
+            return False
+        
+        return last_two[0].get('from') == last_two[1].get('to')
+    
+    def _needs_update(self) -> bool:
+        """Check if context needsupdate based on TTL."""
+        if not self.last_context_update:
+            return True
+        
+        try:
+            last_update = datetime.fromisoformat(self.last_context_update)
+            elapsed = datetime.now() - last_update
+            return elapsed > timedelta(minutes=self.CONTEXT_TTL_MINUTES)
+        except Exception:
+            return True
+    
+    def detect_context(self, force_update: bool = False) -> str:
         """
         Detect current market context based on NIFTY.
         
-        BULLISH: price > EMA50
-        BEARISH: price < EMA50  
-        SIDEWAYS: otherwise (price near EMA50 within range)
+        Uses ATR-based detection + structure analysis + volatility regime.
         
         Returns:
-            Context string: BULLISH, BEARISH, or SIDEWAYS
+            Context string: STRONG_BULLISH, BULLISH, STRONG_BEARISH, BEARISH, or SIDEWAYS
         """
+        if not force_update and not self._needs_update():
+            return self.current_context
+        
         nifty_data = self._fetch_nifty_data()
         
         if not nifty_data:
             logger.warning("Could not fetch NIFTY data, defaulting to SIDEWAYS")
             return 'SIDEWAYS'
         
-        close = nifty_data.get('close', 0)
-        ema50 = nifty_data.get('ema50', 0)
-        atr = nifty_data.get('atr', 1)
+        context, strength = self._detect_context_with_structure(nifty_data)
+        self.volatility_regime = nifty_data.get('volatility_regime', 'NORMAL')
         
-        if ema50 <= 0:
-            return 'SIDEWAYS'
+        base_context = context.split('_')[0] if '_' in context else context
         
-        price_deviation = abs(close - ema50) / ema50 * 100
+        persistence = self._get_context_persistence()
+        recent_flip = self._detect_context_flip()
         
-        if close > ema50 * 1.02:
-            context = 'BULLISH'
-        elif close < ema50 * 0.98:
-            context = 'BEARISH'
-        else:
+        if recent_flip and persistence < 3:
             context = 'SIDEWAYS'
+            logger.info(f"Context flip detected - defaulting to SIDEWAYS (whipsaw filter)")
         
         if context != self.current_context:
             self.context_history.append({
                 'from': self.current_context,
                 'to': context,
-                'price': close,
-                'ema50': ema50,
+                'strength': strength,
+                'persistence': persistence,
+                'volatility': self.volatility_regime,
+                'price': nifty_data.get('close', 0),
+                'ema50': nifty_data.get('ema50', 0),
+                'atr': nifty_data.get('atr', 0),
                 'timestamp': datetime.now().isoformat()
             })
             self.current_context = context
+            self.last_context_update = datetime.now().isoformat()
             self._save_context()
-            logger.info(f"Market context changed: {context} (price: {close:.2f}, EMA50: {ema50:.2f})")
+            logger.info(f"Market context changed: {context} (strength: {strength}, persistence: {persistence})")
         
         return context
     
@@ -152,30 +307,73 @@ class MarketContextEngine:
         """Get current market context."""
         return self.current_context
     
+    def get_base_context(self) -> str:
+        """Get base context without strength prefix."""
+        if '_' in self.current_context:
+            return self.current_context.split('_')[0]
+        return self.current_context
+    
     def apply_context_rules(self, signal: Any, base_score: float) -> Tuple[float, str]:
         """
         Apply market context rules to signal scoring.
         
         Rules:
-        - IF NIFTY SIDEWAYS: reduce TREND score by -1
-        - IF NIFTY BEARISH: reduce all bullish signals by -2
+        - IF SIDEWAYS and TREND strategy: reduce score
+        - IF BEARISH: reduce LONG signals more
+        - IF BULLISH: reduce SHORT signals more
+        - IF STRONG contexts: apply stronger adjustments
         
         Returns:
             Tuple of (adjusted_score, rejection_reason)
         """
         context = self.get_context()
+        base_ctx = self.get_base_context()
         adjusted_score = base_score
         rejection_reason = ""
         
         strategy_type = getattr(signal, 'strategy_type', 'TREND')
+        signal_direction = getattr(signal, 'direction', 'LONG')
         
-        if context == 'SIDEWAYS' and strategy_type == 'TREND':
-            adjusted_score -= 1.0
-            rejection_reason = "NIFTY sideways - trend signals weakened"
+        is_strong = context.startswith('STRONG')
+        strength_multiplier = 2.0 if is_strong else 1.0
         
-        elif context == 'BEARISH':
-            adjusted_score -= 2.0
-            rejection_reason = "NIFTY bearish - all bullish signals reduced"
+        if base_ctx == 'SIDEWAYS':
+            if strategy_type == 'TREND':
+                return 0, "Hard reject - sideways market"
+            else:
+                adjusted_score -= 0.5
+                rejection_reason = "NIFTY sideways - mean reversion allowed"
+        
+        elif base_ctx == 'BEARISH':
+            if signal_direction == 'LONG':
+                adjusted_score -= 2.0 * strength_multiplier
+                rejection_reason = "NIFTY bearish - long signals penalized"
+            elif signal_direction == 'SHORT':
+                adjusted_score += 1.0 * strength_multiplier
+                rejection_reason = "NIFTY bearish - short signals boosted"
+            else:
+                adjusted_score -= 2.0 * strength_multiplier
+                rejection_reason = "NIFTY bearish - all directions penalized"
+        
+        elif base_ctx == 'BULLISH':
+            if signal_direction == 'SHORT':
+                adjusted_score -= 2.0 * strength_multiplier
+                rejection_reason = "NIFTY bullish - short signals penalized"
+            elif signal_direction == 'LONG':
+                adjusted_score += 1.0 * strength_multiplier
+                rejection_reason = "NIFTY bullish - long signals boosted"
+            else:
+                adjusted_score -= 2.0 * strength_multiplier
+                rejection_reason = "NIFTY bullish - all directions penalized"
+        
+        if self.volatility_regime == 'HIGH':
+            adjusted_score *= 0.6
+            rejection_reason += " (HIGH volatility - score heavily reduced)"
+        
+        persistence = self._get_context_persistence()
+        if persistence >= 5:
+            adjusted_score *= 1.1
+            rejection_reason += f" (context persistent {persistence} periods - score boosted)"
         
         return max(0, adjusted_score), rejection_reason
     
@@ -186,21 +384,30 @@ class MarketContextEngine:
         Returns:
             Tuple of (should_reject, reason)
         """
-        if context == 'SIDEWAYS':
-            return True, "NIFTY SIDEWAYS - no-trade zone"
+        base_ctx = self.get_base_context()
+        
+        if base_ctx == 'SIDEWAYS':
+            return True, "SIDEWAYS market - capital destruction zone"
+        
         return False, ""
     
     def get_context_stats(self) -> Dict[str, Any]:
         """Get context statistics."""
+        recent_contexts = [h.get('to') for h in self.context_history[-5:]]
         return {
             'current_context': self.current_context,
+            'base_context': self.get_base_context(),
             'history_count': len(self.context_history),
-            'recent_contexts': [h.get('to') for h in self.context_history[-5:]]
+            'recent_contexts': recent_contexts,
+            'persistence': self._get_context_persistence(),
+            'volatility_regime': self.volatility_regime,
+            'recent_flip': self._detect_context_flip()
         }
     
     def force_context(self, context: str) -> None:
         """Manually set market context (for testing)."""
-        if context in ['BULLISH', 'BEARISH', 'SIDEWAYS']:
+        valid_contexts = ['STRONG_BULLISH', 'BULLISH', 'STRONG_BEARISH', 'BEARISH', 'SIDEWAYS']
+        if context in valid_contexts:
             self.current_context = context
             self._save_context()
             logger.info(f"Market context manually set to: {context}")
@@ -214,11 +421,17 @@ class MarketContextEngine:
         
         return {
             'context': self.current_context,
+            'base_context': self.get_base_context(),
             'close': nifty_data.get('close', 0),
             'ema50': nifty_data.get('ema50', 0),
+            'ema20': nifty_data.get('ema20', 0),
             'atr': nifty_data.get('atr', 0),
-            'high_20': nifty_data.get('high', 0),
-            'low_20': nifty_data.get('low', 0)
+            'atr_percent': nifty_data.get('atr_percent', 0),
+            'high_20': nifty_data.get('high_20', 0),
+            'low_20': nifty_data.get('low_20', 0),
+            'ema_slope': nifty_data.get('ema_slope', 0),
+            'volatility_regime': self.volatility_regime,
+            'persistence': self._get_context_persistence()
         }
 
 

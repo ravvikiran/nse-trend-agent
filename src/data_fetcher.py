@@ -7,6 +7,7 @@ Fetches OHLCV data from Yahoo Finance for NSE stocks.
 import yfinance as yf
 import pandas as pd
 import logging
+import time
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 
@@ -41,7 +42,7 @@ class DataFetcher:
     
     def fetch_stock_data(self, ticker: str, interval: Optional[str] = None, days: Optional[int] = None) -> Optional[pd.DataFrame]:
         """
-        Fetch historical data for a single stock.
+        Fetch historical data for a single stock with exponential backoff on errors.
         
         Args:
             ticker: Stock ticker symbol (e.g., 'RELIANCE')
@@ -51,6 +52,8 @@ class DataFetcher:
         Returns:
             DataFrame with OHLCV data or None if fetch fails
         """
+        import time
+        
         # Use instance defaults if not specified
         actual_interval = interval if interval else self.interval
         actual_days = days if days else self.period
@@ -58,42 +61,55 @@ class DataFetcher:
         # Add .NS suffix for NSE stocks
         nse_ticker = f"{ticker}.NS" if not ticker.endswith('.NS') else ticker
         
-        try:
-            stock = yf.Ticker(nse_ticker)
-            df = stock.history(
-                period=f"{actual_days}d",
-                interval=actual_interval,
-                auto_adjust=False
-            )
-            
-            if df.empty:
-                return None
-            
-            # Minimum candles based on interval
-            # 1D: 20 candles (20 days)
-            # 1H: 50 candles 
-            # 15m: 50 candles
-            min_candles = {
-                '1D': 20, '1d': 20,
-                '1H': 30, '1h': 30,
-                '15m': 30, '15M': 30
-            }.get(actual_interval, 50)
-            
-            if len(df) < min_candles:
-                return None
-            
-            # Normalize column names to lowercase
-            df.columns = df.columns.str.lower()
-            
-            # Add ticker column for reference
-            df['ticker'] = ticker
-            
-            logger.debug(f"Fetched {len(df)} candles for {nse_ticker} ({actual_interval})")
-            return df
-            
-        except Exception as e:
-            # Silently handle errors to avoid logging noise
-            return None
+        # Retry with exponential backoff
+        for attempt in range(3):
+            try:
+                stock = yf.Ticker(nse_ticker)
+                df = stock.history(
+                    period=f"{actual_days}d",
+                    interval=actual_interval,
+                    auto_adjust=False
+                )
+                
+                if df.empty:
+                    if attempt < 2:
+                        time.sleep(2 ** attempt)
+                        continue
+                    return None
+                
+                # Minimum candles based on interval
+                # 1D: 20 candles (20 days)
+                # 1H: 50 candles 
+                # 15m: 50 candles
+                min_candles = {
+                    '1D': 20, '1d': 20,
+                    '1H': 30, '1h': 30,
+                    '15m': 30, '15M': 30
+                }.get(actual_interval, 50)
+                
+                if len(df) < min_candles:
+                    if attempt < 2:
+                        time.sleep(2 ** attempt)
+                        continue
+                    return None
+                
+                # Normalize column names to lowercase
+                df.columns = df.columns.str.lower()
+                
+                # Add ticker column for reference
+                df['ticker'] = ticker
+                
+                logger.debug(f"Fetched {len(df)} candles for {nse_ticker} ({actual_interval})")
+                return df
+                
+            except Exception as e:
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+                else:
+                    logger.debug(f"Failed to fetch {nse_ticker} after 3 attempts: {e}")
+                    return None
+        
+        return None
     
     def fetch_multiple_stocks(self, tickers: list, max_workers: int = 3) -> Dict[str, pd.DataFrame]:
         """
