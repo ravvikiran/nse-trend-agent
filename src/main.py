@@ -714,30 +714,30 @@ Loss: -{loss_pct:.1f}%
             risk = entry - stop_loss
             t1 = entry + (risk * 2)
             t2 = entry + (risk * 3)
-            t3 = entry + (risk * 4)
         else:
             entry = signal.entry_min if hasattr(signal, 'entry_min') else signal.current_price
             stop_loss = signal.stop_loss
             t1 = signal.target_1 if hasattr(signal, 'target_1') else 0
             t2 = signal.target_2 if hasattr(signal, 'target_2') else 0
-            t3 = signal.target_3 if hasattr(signal, 'target_3') else 0
         
         quality = getattr(signal, 'quality', 'B')
-        context = getattr(signal, 'market_context', 'TRENDING')
         score = getattr(signal, 'final_score', 0)
         
-        alert = f"""🚀 STOCK: {ticker}
+        sl_pct = ((entry - stop_loss) / entry) * 100
+        t1_pct = ((t1 - entry) / entry) * 100
+        t2_pct = ((t2 - entry) / entry) * 100
+        
+        emoji = "📈" if strategy == 'TREND' else "📊"
+        
+        alert = f"""{emoji} {strategy} SIGNAL
 
-💰 Entry: ₹{entry:.2f}
-🛑 Stop: ₹{stop_loss:.2f}
+🎯 Entry Zone: ₹{entry:.2f}
 
-🎯 Targets:
-{t1:.2f} / {t2:.2f} / {t3:.2f}
+🛡️ Stop Loss: ₹{stop_loss:.2f} ({sl_pct:.1f}%)
 
-⭐ Quality: {quality}
-🔥 Context: {context}
-
-⚡ Score: {score}"""
+🎯 Targets (Conf: {score}/10):
+  T1: ₹{t1:.2f} (+{t1_pct:.1f}%)
+  T2: ₹{t2:.2f} (+{t2_pct:.1f}%)"""
         
         target_method(alert)
         
@@ -747,13 +747,12 @@ Loss: -{loss_pct:.1f}%
             direction="BUY",
             entry=entry,
             stop_loss=stop_loss,
-            targets=[t1, t2, t3],
+            targets=[t1, t2],
             indicators={
                 'volume_ratio': signal.volume_ratio,
                 'final_score': score
             },
             quality=quality,
-            market_context=context,
             entry_type='BREAKOUT',
             breakout_strength=signal.breakout_strength
         )
@@ -1105,9 +1104,6 @@ Loss: -{loss_pct:.1f}%
         """Format trend signal into detailed alert message per PRD v2.0."""
         indicators = signal.indicators
         
-        ist = pytz.timezone('Asia/Kolkata')
-        now = datetime.now(ist)
-        
         current_price = indicators.get('close', 0)
         ema20 = indicators.get('ema20', 0)
         ema50 = indicators.get('ema50', 0)
@@ -1137,9 +1133,6 @@ Loss: -{loss_pct:.1f}%
         support, resistance = self._calculate_support_resistance(df) if df is not None else (None, None)
         
         trend_score = signal.trend_score if hasattr(signal, 'trend_score') else indicators.get('trend_score', 0)
-        volume_ratio = signal.volume_ratio if hasattr(signal, 'volume_ratio') else indicators.get('volume_ratio', 0)
-        rsi_value = indicators.get('rsi_value', 0) or indicators.get('rsi', 0)
-        score_breakdown = signal.score_breakdown if hasattr(signal, 'score_breakdown') else indicators.get('score_breakdown', {})
         
         sl_pct = ((entry_min - stop_loss) / entry_min) * 100
         t1_pct = ((target_1 - entry_min) / entry_min) * 100
@@ -1148,46 +1141,25 @@ Loss: -{loss_pct:.1f}%
         alert_lines = [
             "📈 TREND SIGNAL",
             "",
-            f"Stock: {signal.ticker}",
-            f"Time: {now.strftime('%Y-%m-%d %H:%M')} IST",
+            f"🎯 Entry Zone: ₹{entry_max:.2f}",
             "",
-            f"💰 Price: ₹{current_price:.2f}",
+            f"🛡️ Stop Loss: ₹{stop_loss:.2f} ({sl_pct:.1f}%)",
             "",
-            "🎯 Entry Zone:",
-            f"  Buy Above: ₹{entry_max:.2f}",
-            "",
-            "🛡️ Stop Loss (2-3% enforced):",
-            f"  SL: ₹{stop_loss:.2f} ({sl_pct:.1f}%)",
-            "",
-            "🎯 Targets (RR ≥ 2:1):",
-            f"  Target 1: ₹{target_1:.2f} (+{t1_pct:.1f}%) ETA: {time_t1}",
-            f"  Target 2: ₹{target_2:.2f} (+{t2_pct:.1f}%) ETA: {time_t2}",
+            f"🎯 Targets (Conf: {trend_score}/10):",
+            f"  T1: ₹{target_1:.2f} (+{t1_pct:.1f}%) ETA: {time_t1}",
+            f"  T2: ₹{target_2:.2f} (+{t2_pct:.1f}%) ETA: {time_t2}",
             ""
         ]
         
         if support and resistance:
             alert_lines.extend([
-                "📊 S/R Levels:",
-                f"  Support: ₹{support:.2f}",
-                f"  Resistance: ₹{resistance:.2f}",
-                ""
+                f"📊 S/R: ₹{support:.2f} / ₹{resistance:.2f}"
             ])
-        
-        alert_lines.extend([
-            "📊 Signal Metrics:",
-            f"  Score: {trend_score}/10",
-            f"  Volume Ratio: {volume_ratio:.2f}x",
-            f"  RSI: {rsi_value:.1f}",
-            ""
-        ])
         
         return "\n".join(alert_lines)
     
     def _format_verc_alert(self, signal, df=None):
         """Format VERC signal into detailed alert message."""
-        ist = pytz.timezone('Asia/Kolkata')
-        now = datetime.now(ist)
-        
         atr = self._calculate_atr(df) if df is not None else None
         time_t1 = self._estimate_time_to_target(signal.current_price, signal.target_1, atr) if atr else "Unknown"
         time_t2 = self._estimate_time_to_target(signal.current_price, signal.target_2, atr) if atr else "Unknown"
@@ -1201,37 +1173,20 @@ Loss: -{loss_pct:.1f}%
         alert_lines = [
             "📊 VERC SIGNAL (Accumulation)",
             "",
-            f"Stock: {signal.stock_symbol}",
-            f"Time: {now.strftime('%Y-%m-%d %H:%M')} IST",
+            f"🎯 Entry Zone: ₹{signal.entry_min:.2f} - ₹{signal.entry_max:.2f}",
             "",
-            f"💰 Current Price: ₹{signal.current_price:.2f}",
+            f"🛡️ Stop Loss: ₹{signal.stop_loss:.2f} ({sl_pct:.1f}%)",
             "",
-            "🔄 Compression Range:",
-            f"  Range: ₹{signal.compression_low:.2f} - ₹{signal.compression_high:.2f}",
-            f"  Range Width: ₹{signal.range_height:.2f}",
-            "",
-            "🎯 Entry Zone:",
-            f"  Buy Above: ₹{signal.entry_min:.2f} - ₹{signal.entry_max:.2f}",
-            "",
-            "🛡️ Stop Loss (2-3% enforced):",
-            f"  SL: ₹{signal.stop_loss:.2f} ({sl_pct:.1f}%)",
-            "",
-            "🎯 Targets (RR ≥ 2:1):",
-            f"  Target 1: ₹{signal.target_1:.2f} (+{t1_pct:.1f}%) ETA: {time_t1}",
-            f"  Target 2: ₹{signal.target_2:.2f} (+{t2_pct:.1f}%) ETA: {time_t2}",
+            f"🎯 Targets (Conf: {signal.confidence_score}/10):",
+            f"  T1: ₹{signal.target_1:.2f} (+{t1_pct:.1f}%) ETA: {time_t1}",
+            f"  T2: ₹{signal.target_2:.2f} (+{t2_pct:.1f}%) ETA: {time_t2}",
             ""
         ]
         
-        # Add S/R levels if available
         if support and resistance:
             alert_lines.extend([
-                "📊 S/R Levels:",
-                f"  Support: ₹{support:.2f}",
-                f"  Resistance: ₹{resistance:.2f}",
-                ""
+                f"📊 S/R: ₹{support:.2f} / ₹{resistance:.2f}"
             ])
-        
-        alert_lines.append(f"Confidence: {signal.confidence_score}/10")
         
         return "\n".join(alert_lines)
     
@@ -1254,8 +1209,12 @@ Loss: -{loss_pct:.1f}%
             self.total_signals += 1
     
     def _send_no_signals_message(self):
-        """Log when no signals are found. No notification sent."""
-        logger.info("No signals found in this scan")
+        """Send 'no signals' message when no signals are found."""
+        message = "⚠️ No signals."
+        
+        target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
+        target_method(message)
+        logger.info("No signals alert sent")
     
     def _calculate_trade_status(self, trade: Dict, current_price: float) -> str:
         """Calculate trade status based on current price."""
@@ -2126,11 +2085,11 @@ Loss: -{loss_pct:.1f}%"""
             
             filtered_signals = filtered_signals[:self.max_signals_per_day]
             
-            if not filtered_signals:
-                logger.info("Startup scan complete - No signals met criteria")
-                return
-            
             target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
+            
+            if not filtered_signals:
+                self._send_startup_no_signals_message()
+                return
             
             for signal in filtered_signals:
                 self._send_new_signal_alert(signal, target_method)
@@ -2143,24 +2102,11 @@ Loss: -{loss_pct:.1f}%"""
     
     def _send_startup_no_signals_message(self, reason: str = ""):
         """Send 'no signals yet' message on startup when no signals satisfy criteria."""
-        import pytz
-        
-        ist = pytz.timezone('Asia/Kolkata')
-        now = datetime.now(ist)
-        
-        message = f"""📊 Startup Scan Complete
-Time: {now.strftime('%Y-%m-%d %H:%M')} IST
-
-⚠️ No signals yet.
-
-Reason: {reason}
-
-The scanner will continue monitoring and will send signals when criteria are met.
-Next scan in 15 minutes."""
+        message = "⚠️ No signals."
         
         target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
         target_method(message)
-        logger.info(f"Startup no signals alert sent: {reason}")
+        logger.info("Startup no signals alert sent")
     
     def _run_periodic_scan(self):
         """

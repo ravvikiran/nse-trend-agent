@@ -2,6 +2,8 @@
 
 Automated trading scanner that monitors ~500 NSE stocks during market hours and detects potential uptrend starts based on EMA alignment and volume confirmation. Includes AI-powered stock analysis via two-way Telegram bot, Trade Journal System, Auto-Optimization Engine, and AI Learning Layer.
 
+**Latest Update:** 2026-04-13 - Fixed test commands and data fetching reliability
+
 ## Features
 
 ### Core Scanning
@@ -100,7 +102,9 @@ To enable AI-powered stock analysis, set `OPENAI_API_KEY` environment variable.
 
 ```bash
 python -m src.main
-python -m src.main --test  # Single scan test
+python -m src.main --test              # Single scan test
+python -m src.main --test-telegram     # Test Telegram connection
+python -m src.main --mock-alerts       # Test with mock alerts
 ```
 
 ### Run Specific Strategy

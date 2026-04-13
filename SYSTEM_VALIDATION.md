@@ -593,60 +593,52 @@ Strategy Weight Optimization
 
 **Purpose:** Sends trading signals to Telegram
 
-**Alert Formats:**
+**Alert Format (v2.2 - Simplified):**
 
 **Trend Signal:**
 ```
 📈 TREND SIGNAL
 
-Stock: RELIANCE
-Time: 2026-04-09 10:30 IST
+🎯 Entry Zone: ₹2462.25
 
-💰 Price: ₹2450.00
+🛡️ Stop Loss: ₹2400.00 (-2.0%)
 
-🎯 Entry Zone:
-  Buy Above: ₹2462.25
+🎯 Targets (Conf: 8/10):
+  T1: ₹2600.00 (+6.1%) ETA: 3-5 days
+  T2: ₹2750.00 (+12.2%) ETA: 7-10 days
 
-🛡️ Stop Loss:
-  SL: ₹2400.00 (-2.0%)
-
-🎯 Targets (RR ≥ 2:1):
-  Target 1: ₹2600.00 (+6.1%)
-  Target 2: ₹2750.00 (+12.2%)
-
-📊 Signal Metrics:
-  Score: 8/10
-  Volume Ratio: 1.5x
-  RSI: 58.0
+📊 S/R: ₹2350.00 / ₹2500.00
 ```
 
 **VERC Signal:**
 ```
 📊 VERC SIGNAL (Accumulation)
 
-Stock: 360ONE
-Compression Range: ₹480-500
-Entry: ₹500-502.50
-SL: ₹480
-Target 1: ₹520 (+4%)
-Target 2: ₹540 (+8%)
-Confidence: 8/10
+🎯 Entry Zone: ₹500.00 - ₹502.50
+
+🛡️ Stop Loss: ₹480.00 (-2.5%)
+
+🎯 Targets (Conf: 8/10):
+  T1: ₹520.00 (+4.0%) ETA: 2-4 days
+  T2: ₹540.00 (+8.0%) ETA: 5-8 days
+
+📊 S/R: ₹475.00 / ₹510.00
 ```
 
 **MTF Signal:**
 ```
-🟢 BUY SIGNAL - HDFCBANK
+🟢 MTF SIGNAL
 
-Timeframes: 1D → 1H → 15m
+🎯 Entry Zone: ₹1650.00
 
-📈 Trade Parameters:
-  Entry: ₹1650.00
-  Stop Loss: ₹1620.00 (-1.8%)
-  Target 1: ₹1720 (+4.2%) [R:R = 1:2]
-  Target 2: ₹1790 (+8.5%) [R:R = 1:3]
+🛡️ Stop Loss: ₹1620.00 (-1.8%)
 
-🔍 Analysis:
-  • Trend (BULLISH): Price ₹1650 > EMA200 ₹1620
+🎯 Targets (Conf: 8/10):
+  T1: ₹1720.00 (+4.2%)
+  T2: ₹1790.00 (+8.5%)
+
+📊 1D→1H→15m
+```
   • Structure: HIGHER_HIGHS
   • Pullback: COMPLETE at EMA50
   • Volume: 1.5x above avg
@@ -1078,5 +1070,42 @@ This software is for **educational purposes only**. Trading in financial markets
 
 ---
 
-**Document Version:** 2.1  
-**Last Updated:** 2026-04-12
+**Document Version:** 2.2  
+**Last Updated:** 2026-04-13
+
+---
+
+## 19. Recent Fixes (2026-04-13)
+
+### 19.1 Data Fetcher Reliability Improvements
+
+| Fix | Description |
+|-----|-------------|
+| Exponential Backoff | Retry 3 times with 1s, 2s, 4s delay on failures |
+| Minimum Candles | Validates 20 (1D), 30 (1H/15m) candles before accepting data |
+| Error Logging | Logs specific failures for debugging |
+
+### 19.2 Trade Validator Fixes
+
+| Issue | Fix |
+|-------|-----|
+| EMA Alignment Check | Removed - was never set on signal objects, blocking ALL trades silently |
+| Attribute Errors | Changed from `signal.ema_alignment` to proper attribute access |
+| Logging | Added logging for filtered signals with reasons |
+
+### 19.4 Alert Message Format (Updated 2026-04-13)
+
+| Field | Status | Format |
+|-------|--------|--------|
+| Entry Zone | ✅ | `🎯 Entry Zone: ₹{entry}` |
+| Stop Loss | ✅ | `🛡️ Stop Loss: ₹{sl} ({pct}%)` |
+| Targets with Conf | ✅ | `🎯 Targets (Conf: {score}/10):` |
+| Time Estimation | ✅ | `ETA: {time}` |
+| S/R Levels | ✅ | `📊 S/R: ₹{support} / ₹{resistance}` |
+
+**Removed from alerts:**
+- Stock name header
+- Timestamp
+- Current price
+- Volume Ratio / RSI metrics
+- Compression range details

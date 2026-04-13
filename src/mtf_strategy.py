@@ -1148,54 +1148,32 @@ def format_mtf_signal_alert(signal: MTFSignal) -> str:
     """
     Format the MTF signal as a detailed alert message.
     
-    Standardized Signal Output Format:
-    
-    Type: BUY / SELL
-    Symbol: NIFTY / BTC
-    Entry:
-    Stop Loss:
-    Target:
-    Timeframe:
-    Reason:
-    - Trend: Bullish (1D EMA 200)
-    - Pullback: EMA 50
-    - Breakout: Confirmed
-    - Volume: Above Avg
+    Simplified format (v2.2):
+    - Entry Zone
+    - Stop Loss  
+    - Targets with confidence
+    - Time estimation
+    - S/R Levels
     """
-    from datetime import datetime
-    import pytz
-    
-    # Get current time in IST
-    ist = pytz.timezone('Asia/Kolkata')
-    now = datetime.now(ist)
-    
     emoji = "🟢" if signal.signal_type == "BUY" else "🔴"
     
+    sl_pct = ((signal.entry_price - signal.stop_loss) / signal.entry_price) * 100
+    t1_pct = ((signal.target_1 - signal.entry_price) / signal.entry_price) * 100
+    t2_pct = ((signal.target_2 - signal.entry_price) / signal.entry_price) * 100
+    
     lines = [
-        f"{emoji} {signal.signal_type} SIGNAL - {signal.ticker}",
+        f"{emoji} MTF SIGNAL",
         "",
-        f"⏰ Time: {now.strftime('%Y-%m-%d %H:%M')} IST",
-        f"📊 Timeframes: {signal.trend_timeframe} → {signal.structure_timeframe} → {signal.entry_timeframe}",
+        f"🎯 Entry Zone: ₹{signal.entry_price:.2f}",
         "",
-        "📈 TRADE PARAMETERS:",
-        f"  Entry: ₹{signal.entry_price:.2f}",
-        f"  Stop Loss: ₹{signal.stop_loss:.2f} ({((signal.stop_loss/signal.entry_price)-1)*100:.1f}%)",
-        f"  Target 1: ₹{signal.target_1:.2f} (+{((signal.target_1/signal.entry_price)-1)*100:.1f}%) [R:R = 1:{signal.risk_reward_1}]",
-        f"  Target 2: ₹{signal.target_2:.2f} (+{((signal.target_2/signal.entry_price)-1)*100:.1f}%) [R:R = 1:{signal.risk_reward_2}]",
+        f"🛡️ Stop Loss: ₹{signal.stop_loss:.2f} ({sl_pct:.1f}%)",
         "",
-        "🔍 ANALYSIS BREAKDOWN:"
+        f"🎯 Targets (Conf: {signal.confidence_score}/10):",
+        f"  T1: ₹{signal.target_1:.2f} (+{t1_pct:.1f}%)",
+        f"  T2: ₹{signal.target_2:.2f} (+{t2_pct:.1f}%)",
+        "",
+        f"📊 {signal.trend_timeframe}→{signal.structure_timeframe}→{signal.entry_timeframe}"
     ]
-    
-    for key, value in signal.reasoning_breakdown.items():
-        lines.append(f"  • {key}: {value}")
-    
-    lines.extend([
-        "",
-        f"🎯 Confidence: {signal.confidence_score}/10",
-        f"📊 Signal ID: {signal.ticker}_{signal.timestamp.strftime('%Y%m%d%H%M%S')}",
-        "",
-        "⚠️ This signal is being tracked for outcome monitoring"
-    ])
     
     return "\n".join(lines)
 
