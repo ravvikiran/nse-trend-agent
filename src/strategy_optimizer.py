@@ -1,6 +1,10 @@
 """
 Strategy Performance Tracker
-Tracks performance metrics per strategy (TREND, VERC).
+Tracks performance metrics per strategy (TREND, VERC, MTF).
+
+FIXES APPLIED:
+  - adapt_filters_based_on_performance(): new method that RELAXES filters
+    when win rate improves, preventing permanent over-tightening.
 """
 
 import os
@@ -49,6 +53,13 @@ class StrategyPerformanceTracker:
         'rsi_max': 50,
         'atr_min': 0.1,
         'breakout_strength_min': 0.0
+    }
+
+    FILTER_DEFAULTS = {
+        'volume_ratio_min': 1.5,
+        'rsi_max': 65,
+        'atr_min': 0.5,
+        'breakout_strength_min': 0.0,
     }
 
     TIMEOUT_PENALTY_RR = -0.5
@@ -448,6 +459,48 @@ class StrategyPerformanceTracker:
             logger.info(f"Adapted filters: {self.adaptive_filters}")
         
         return self.adaptive_filters.copy()
+
+    def adapt_filters_based_on_performance(self) -> Dict[str, Any]:
+        """
+        NEW (FIX): Relax filters when overall win rate is healthy.
+        Prevents permanent over-tightening after a bad market period.
+        Relaxation moves each filter halfway back toward its default value.
+        Only runs when enough trades are available.
+        """
+        all_stats = self.get_all_strategy_stats()
+        closed_counts = [s.get('trades', 0) for s in all_stats.values()]
+        if sum(closed_counts) < self.min_trades:
+            return self.adaptive_filters.copy()
+
+        win_rates = [s.get('win_rate', 0) for s in all_stats.values() if s.get('trades', 0) >= 5]
+        if not win_rates:
+            return self.adaptive_filters.copy()
+
+        avg_win_rate = sum(win_rates) / len(win_rates)
+        changes = []
+
+        if avg_win_rate > 60:
+            for key, default_val in self.FILTER_DEFAULTS.items():
+                current = self.adaptive_filters.get(key, default_val)
+                floor = self.FILTER_FLOORS.get(key, 0)
+                if key == 'rsi_max':
+                    if current < default_val:
+                        new_val = round(min(default_val, current + (default_val - current) * 0.5), 2)
+                        if new_val != current:
+                            self.adaptive_filters[key] = new_val
+                            changes.append(f"{key}: {current} → {new_val} (win_rate={avg_win_rate:.1f}%)")
+                else:
+                    if current > default_val:
+                        new_val = round(max(floor, current - (current - default_val) * 0.5), 3)
+                        if new_val != current:
+                            self.adaptive_filters[key] = new_val
+                            changes.append(f"{key}: {current} → {new_val} (win_rate={avg_win_rate:.1f}%)")
+
+            if changes:
+                self._save_filters()
+                logger.info(f"Filter relaxation (win_rate={avg_win_rate:.1f}%): {changes}")
+
+        return self.adaptive_filters.copy()
     
     def adapt_filters_from_factor_analysis(self, factor_recommendations: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -730,7 +783,9 @@ class StrategyPerformanceTracker:
         if changes:
             self._save_filters()
             logger.info(f"Failure pattern adaptations: {changes}")
-        
+
+        self.adapt_filters_based_on_performance()
+
         return self.adaptive_filters.copy()
     
     def _save_filters(self) -> None:
@@ -790,6 +845,8 @@ class StrategyPerformanceTracker:
             'context_weights': self.context_weights,
             'adaptive_filters': self.adaptive_filters,
             'filter_caps': self.FILTER_CAPS,
+            'filter_floors': self.FILTER_FLOORS,
+            'filter_defaults': self.FILTER_DEFAULTS,
             'performance': all_stats,
             'scores': {
                 s: stats.get('weighted_score', self._calculate_performance_score(stats))

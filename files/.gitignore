@@ -1,0 +1,38 @@
+# === Credentials — NEVER commit these ===
+config/settings.json
+
+# === Generated data — too large and contains PII ===
+data/
+logs/
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.so
+
+# === Virtual environments ===
+venv/
+env/
+.venv/
+.env/
+
+# === IDE ===
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# === Pytest / coverage ===
+.pytest_cache/
+.coverage
+htmlcov/

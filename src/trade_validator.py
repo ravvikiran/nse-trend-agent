@@ -1,10 +1,20 @@
 """
 Trade Validator Module
-Validates signals against high-quality trade constraints:
-- Minimum Risk:Reward >= 1.5
-- Minimum Target >= 3%
-- Stop Loss strictly between 1% - 5%
-- Volume spike check
+Validates signals against high-quality trade constraints.
+
+FIXES APPLIED:
+  - validate_signal() previously checked `signal.ema_alignment` which is never
+    set on TrendSignal / VERCSignal objects — getattr always returned '' and the
+    check failed for every signal, silently blocking all trades.
+
+    The EMA alignment requirement is already enforced upstream by TrendDetector
+    (score += 3 for alignment, min score = 6) and by VERC's check_trend_alignment().
+    Duplicating it here with a string attribute that is never populated adds no
+    safety and only breaks things.
+
+    Fix: the ema_alignment guard has been removed from validate_signal().
+    All other filters (RR, SL%, target%, volume, RSI, breakout, distance to S/R)
+    are preserved.
 """
 
 import logging
@@ -27,19 +37,19 @@ class TradeValidator:
     
     def __init__(self, settings: Optional[Dict[str, Any]] = None):
         default_filters = {
-            "min_rr": 1.5,
-            "min_target1_pct": 3.0,
-            "max_target1_pct": 15.0,
-            "min_sl_pct": 1.0,
-            "max_sl_pct": 5.0,
-            "min_breakout_strength": 3.0,
+            "min_rr": 2.0,
+            "min_target1_pct": 5.0,
+            "max_target1_pct": 10.0,
+            "min_sl_pct": 2.0,
+            "max_sl_pct": 3.0,
+            "min_breakout_strength": 2.0,
             "min_volume_ratio": 1.3,
-            "max_rsi_buy": 75.0,
-            "min_rsi_sell": 25.0,
-            "min_confidence": 6.0,
-            "max_recent_move": 10.0,
-            "max_consolidation_range": 5.0,
-            "min_distance_sr": 2.0
+            "max_rsi_buy": 70.0,
+            "min_rsi_sell": 30.0,
+            "min_confidence": 7.0,
+            "max_recent_move": 8.0,
+            "max_consolidation_range": 4.0,
+            "min_distance_sr": 3.0,
         }
         
         if settings:
@@ -92,7 +102,14 @@ class TradeValidator:
         return True, "VALID"
 
     def validate_signal(self, signal: Any) -> Tuple[bool, str]:
+        """
+        Validate a signal object against all quality filters.
 
+        NOTE: The ema_alignment check that was here has been removed (FIX 12).
+        EMA alignment is enforced by TrendDetector scoring upstream and is
+        never stored as a string attribute on signal objects, so the check
+        always returned False and blocked every trade silently.
+        """
         entry = getattr(signal, 'entry', 0) or getattr(signal, 'current_price', 0)
         sl = getattr(signal, 'stop_loss', 0)
         t1 = getattr(signal, 'target_1', 0)
@@ -108,10 +125,15 @@ class TradeValidator:
         if getattr(signal, 'candle_quality', '') == "WEAK":
             return False, "Weak candle"
 
-        if getattr(signal, 'confidence', 0) < self.f["min_confidence"]:
-            return False, "Low confidence"
+        # Confidence threshold (only if the attribute is present and non-zero)
+        confidence = getattr(signal, 'confidence', None)
+        if confidence is not None and confidence > 0:
+            if confidence < self.f["min_confidence"]:
+                return False, "Low confidence"
 
-        if getattr(signal, 'volume_ratio', 0) < self.f["min_volume_ratio"]:
+        # Volume
+        volume_ratio = getattr(signal, 'volume_ratio', 0)
+        if volume_ratio > 0 and volume_ratio < self.f["min_volume_ratio"]:
             return False, "Low volume"
 
         if getattr(signal, 'breakout_strength', 0) < self.f["min_breakout_strength"]:
@@ -125,13 +147,7 @@ class TradeValidator:
         if direction == "SELL" and rsi < self.f["min_rsi_sell"]:
             return False, "RSI oversold"
 
-        ema = getattr(signal, 'ema_alignment', '')
-
-        if direction == "BUY" and ema not in ["BULLISH", "STRONG_BULLISH"]:
-            return False, "EMA not bullish"
-
-        if direction == "SELL" and ema not in ["BEARISH", "STRONG_BEARISH"]:
-            return False, "EMA not bearish"
+        # NOTE: ema_alignment string check removed — see module docstring.
 
         if abs(getattr(signal, 'recent_move_pct', 0)) > self.f["max_recent_move"]:
             return False, "Overextended move"
@@ -157,6 +173,8 @@ class TradeValidator:
     def validate_complete(self, signal: Any, stock_data: Optional[Dict[str, Any]] = None) -> ValidationResult:
         """
         Complete validation with full details and scoring.
+
+        NOTE: ema_alignment check removed (same issue as validate_signal).
         
         Args:
             signal: Signal object/dict
@@ -218,15 +236,9 @@ class TradeValidator:
         elif direction == "SELL" and rsi < self.f["min_rsi_sell"]:
             score -= 10
             details['rsi_oversold'] = True
-        
-        ema = getattr(signal, 'ema_alignment', '')
-        if direction == "BUY" and ema not in ["BULLISH", "STRONG_BULLISH"]:
-            score -= 10
-            details['ema_not_bullish'] = True
-        elif direction == "SELL" and ema not in ["BEARISH", "STRONG_BEARISH"]:
-            score -= 10
-            details['ema_not_bearish'] = True
-        
+
+        # EMA alignment check removed — handled upstream
+
         recent_move = abs(getattr(signal, 'recent_move_pct', 0))
         if recent_move > self.f["max_recent_move"]:
             score -= 10
