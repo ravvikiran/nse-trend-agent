@@ -57,6 +57,9 @@ from trade_validator import create_trade_validator
 # Consolidation Detector
 from consolidation_detector import is_tight_consolidation, is_valid_breakout, is_strong_breakout
 
+# Agent Controller - Makes scanner Agentic AI
+from agent_controller import create_agent_controller, AgentAction
+
 
 def setup_logging(log_level='INFO', log_file='logs/scanner.log'):
     """Setup logging configuration."""
@@ -75,7 +78,7 @@ def setup_logging(log_level='INFO', log_file='logs/scanner.log'):
     )
     
     # Suppress verbose libraries
-    logging.getLogger('yfinance').setLevel(logging.WARNING)
+    logging.getLogger('yfinance').setLevel(logging.CRITICAL)
     logging.getLogger('pandas').setLevel(logging.WARNING)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
@@ -203,6 +206,14 @@ class NSETrendScanner:
         # ==================== Trade Validator ====================
         self.trade_validator = create_trade_validator(self.settings)
         
+        # ==================== Agent Controller (Agentic AI) ====================
+        self.agent_controller = create_agent_controller(
+            ai_analyzer=self.ai_analyzer,
+            market_context_engine=self.market_context_engine,
+            strategy_optimizer=self.strategy_optimizer,
+            trade_journal=self.trade_journal
+        )
+        
         # ==================== Signal Mode Configuration ====================
         signal_mode = self.settings.get('signal_mode', {})
         self.daily_signal_hour = signal_mode.get('daily_signal_hour', 15)
@@ -304,6 +315,7 @@ class NSETrendScanner:
         Main scan method that runs on schedule.
         
         Steps:
+        0. Agent decides action (scan, wait, adjust)
         1. Fetch stock data (single and multi-timeframe)
         2. Run Trend Detection and VERC strategies
         3. Run MTF Strategy (NEW)
@@ -315,7 +327,28 @@ class NSETrendScanner:
         scan_start = datetime.now()
         
         try:
-            # Step 0: Detect market context
+            # Step 0: Agent makes decision (Agentic AI)
+            active_trades = self.trade_journal.get_active_trades()
+            market_data = {
+                'nifty': {'price': 0, 'change_pct': 0},
+                'sectors': {}
+            }
+            
+            agent_decision = self.agent_controller.analyze_and_decide(
+                market_data=market_data,
+                active_signals=active_trades
+            )
+            
+            if agent_decision.action == AgentAction.WAIT:
+                logger.info(f"Agent decided to WAIT: {agent_decision.reasoning}")
+                return
+            elif agent_decision.action == AgentAction.ADJUST_STRATEGY:
+                logger.info(f"Agent adjusting strategy: {agent_decision.reasoning}")
+                self.strategy = agent_decision.recommended_strategies[0] if agent_decision.recommended_strategies else 'all'
+            
+            logger.info(f"Agent decision: {agent_decision.action.value} ({agent_decision.confidence}/10) - {agent_decision.reasoning}")
+            
+            # Step 1: Detect market context
             market_context = self.market_context_engine.detect_context()
             logger.debug(f"Market context: {market_context}")
             
@@ -435,7 +468,7 @@ class NSETrendScanner:
     def _get_current_price(self, symbol: str) -> Optional[float]:
         """Get current price for a stock."""
         try:
-            stock_data = self.data_fetcher.fetch_stock_data(f"{symbol}.NS", interval='1d', days=2)
+            stock_data = self.data_fetcher.fetch_stock_data(symbol, interval='1d', days=2)
             if stock_data is not None and len(stock_data) > 0:
                 return float(stock_data.iloc[-1].get('close', 0))
             return None
@@ -495,6 +528,9 @@ Loss: -{loss_pct:.1f}%
         self.trade_journal.update_trade(trade_id, outcome, exit_price)
         
         self.strategy_optimizer.evaluate()
+        
+        # Agentic self-correction
+        self.agent_controller.self_correct(outcome, trade)
         
         logger.info(f"Trade closed: {trade_id} - {outcome}")
     
@@ -1204,8 +1240,16 @@ Loss: -{loss_pct:.1f}%
         # Use channel if configured
         target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
         
+        agent_state = self.agent_controller.get_agent_state()
+        
         for alert in alerts:
-            target_method(alert)
+            explanation_header = f"\n🤖 Agent Context:\n"
+            explanation_header += f"  Regime: {agent_state.get('last_decision', {}).get('market_regime', 'unknown')}\n"
+            explanation_header += f"  Confidence: {agent_state.get('last_decision', {}).get('confidence', 5)}/10\n"
+            
+            full_alert = alert + explanation_header
+            
+            target_method(full_alert)
             self.total_signals += 1
     
     def _send_no_signals_message(self):

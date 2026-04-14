@@ -83,6 +83,8 @@
         "min_sl_pct": 2.0,
         "max_sl_pct": 3.0,
         "min_breakout_strength": 2.0,
-        "min_volume_ratio": 1.3
+        "min_volume_ratio": 1.3,
+        "max_rsi_buy": 70.0,
+        "min_rsi_sell": 30.0
     }
 }

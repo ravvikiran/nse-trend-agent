@@ -63,8 +63,9 @@ class DataFetcher:
         actual_interval = interval if interval else self.interval
         actual_days = days if days else self.period
         
-        # Add .NS suffix for NSE stocks
-        nse_ticker = f"{ticker}.NS" if not ticker.endswith('.NS') else ticker
+        # Add .NS suffix for NSE stocks (only if not already present)
+        ticker_clean = ticker.replace('.NS', '')
+        nse_ticker = f"{ticker_clean}.NS"
         
         # Retry with exponential backoff
         for attempt in range(3):
@@ -185,7 +186,9 @@ class DataFetcher:
             Dictionary with latest price data or None
         """
         try:
-            stock = yf.Ticker(ticker)
+            ticker_clean = ticker.replace('.NS', '')
+            nse_ticker = f"{ticker_clean}.NS"
+            stock = yf.Ticker(nse_ticker)
             info = stock.info
             
             return {

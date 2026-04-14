@@ -1,8 +1,33 @@
 ## NSE Trend Scanner - Documentation & Issues Tracker
 
-**Last Updated:** 2026-04-13  
+**Last Updated:** 2026-04-14  
 **Status:** All critical issues resolved  
-**Version:** 2.2
+**Version:** 3.0 - Agentic AI
+
+---
+
+## Recent Changes (2026-04-14)
+
+### v3.0 - Agentic AI Release
+
+| Feature | Description |
+|---------|-------------|
+| Agent Controller | New `agent_controller.py` - autonomous decision maker |
+| LLM Decision Making | Uses LLM to decide SCAN/WAIT/ADJUST/MONITOR/ANALYZE |
+| Market Regime Detection | Classifies BULLISH/BEARISH/SIDEWAYS/VOLATILE |
+| Self-Correction | Tracks win/loss streaks, auto-adjusts approach |
+| Natural Language Explanations | Provides reasoning for every agent decision |
+| Agent State | Maintains state in `data/agent_state.json` |
+
+### Agent Actions (v3.0)
+
+| Action | When Used |
+|--------|-----------|
+| `SCAN` | Default - favorable market conditions |
+| `WAIT` | Unfavorable - avoid low-quality signals |
+| `ADJUST_STRATEGY` | Current strategy underperforming |
+| `MONITOR` | High market risk - focus on existing positions |
+| `ANALYZE` | Deep dive on specific stocks/sectors |
 
 ---
 

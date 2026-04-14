@@ -1,20 +1,21 @@
 # NSE Trend Agent - Product Requirements Document
 
-**Version:** 2.0  
-**Date:** 2026-04-05  
-**Project:** NSE Trend Scanner Agent
+**Version:** 3.0  
+**Date:** 2026-04-14  
+**Project:** NSE Trend Scanner Agent (Agentic AI v3.0)
 
 ---
 
 ## 1. Project Overview
 
-**Purpose:** Automated trading scanner for NSE (National Stock Exchange of India) stocks that monitors ~500 stocks during market hours and detects potential uptrend starts.
+**Purpose:** Automated trading scanner for NSE (National Stock Exchange of India) stocks that monitors ~500 stocks during market hours and detects potential uptrend starts. **Now with Agentic AI (v3.0)** - the scanner makes autonomous decisions.
 
 **Technology Stack:**
 - Language: Python
 - Data Source: Yahoo Finance
 - Notifications: Telegram Bot
 - AI: Multi-Provider LLM (OpenAI, Anthropic, Google Gemini, Groq)
+- Agentic AI: Autonomous decision-making with LLM-powered market analysis
 
 ---
 
@@ -110,7 +111,30 @@
 | /help command | ✅ | Help message |
 | Two-way communication | ✅ | Interactive bot |
 
-### 2.7 Learning & Feedback System
+### 2.7 Agentic AI (v3.0) - Autonomous Agent
+
+| Feature | Status | Implementation |
+|---------|--------|----------------|
+| Agent Controller | ✅ | src/agent_controller.py |
+| LLM-powered decision making | ✅ | Uses LLM to analyze and decide actions |
+| Market regime detection | ✅ | BULLISH/BEARISH/SIDEWAYS/VOLATILE classification |
+| Dynamic action selection | ✅ | SCAN/WAIT/ADJUST/MONITOR/ANALYZE |
+| Self-correction | ✅ | Win/loss streak tracking and approach adjustment |
+| Natural language explanations | ✅ | Reasoning provided for every decision |
+| Agent state management | ✅ | data/agent_state.json |
+| Fallback behavior | ✅ | Rule-based when LLM unavailable |
+
+### Agent Actions:
+
+| Action | Description | When Used |
+|--------|-------------|------------|
+| SCAN | Execute normal signal scan | Default, favorable conditions |
+| WAIT | Skip this scan cycle | Unfavorable market conditions |
+| ADJUST_STRATEGY | Change strategy focus | Current strategy underperforming |
+| MONITOR | Focus on existing positions | High market risk |
+| ANALYZE | Deep dive on specific stocks | On demand |
+
+### 2.8 Learning & Feedback System
 
 | Feature | Status | Implementation |
 |---------|--------|----------------|
@@ -245,6 +269,7 @@ nse-trend-agent/
 ├── src/
 │   ├── __init__.py
 │   ├── main.py               # Entry point
+│   ├── agent_controller.py  # Agentic AI (v3.0) - autonomous decision maker
 │   ├── data_fetcher.py       # Yahoo Finance data
 │   ├── indicator_engine.py   # Technical indicators
 │   ├── trend_detector.py     # Trend strategy
@@ -320,5 +345,5 @@ groq>=0.4.0
 
 ---
 
-**Document Version:** 2.0  
-**Last Updated:** 2026-04-05
+**Document Version:** 3.0  
+**Last Updated:** 2026-04-14

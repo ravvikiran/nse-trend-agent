@@ -1,21 +1,23 @@
 # NSE Trend Scanner Agent - System Validation Document
 
-**Version:** 2.1  
-**Date:** 2026-04-12  
+**Version:** 3.0  
+**Date:** 2026-04-14  
 **Purpose:** Comprehensive system documentation for AI validation and review
 
 ---
 
 ## 1. Executive Overview
 
-The **NSE Trend Scanner Agent** is an automated trading signal detection system that monitors ~500 NSE (National Stock Exchange of India) stocks during market hours and generates trading signals through multiple strategies:
+The **NSE Trend Scanner Agent v3.0** is an **Agentic AI** automated trading signal detection system that monitors ~500 NSE (National Stock Exchange of India) stocks during market hours and generates trading signals through multiple strategies:
 
 1. **Trend Detection Strategy** - Identifies EMA alignment + volume confirmation signals
 2. **VERC Strategy** - Volume Expansion Range Compression (accumulation detection)
 3. **MTF Strategy** - Multi-timeframe confirmation (1D + 1H + 15m)
-4. **AI Reasoning** - Multi-provider LLM integration with provider failover
+4. **Agentic AI (v3.0)** - Autonomous decision-making with LLM-powered market analysis
+5. **AI Reasoning** - Multi-provider LLM integration with provider failover
 
 The system includes:
+- **Agentic AI Controller** - Makes autonomous decisions (SCAN/WAIT/ADJUST) based on LLM analysis
 - **Trade Journal** - Tracks every signal with outcomes
 - **Performance Tracker** - Calculates SIQ (Signal Intelligence Quotient)
 - **Auto-Optimization** - Adjusts strategy weights based on historical performance
@@ -30,7 +32,7 @@ The system includes:
 | Language | Python 3.11+ | Core application |
 | Data Source | Yahoo Finance (yfinance) | Real-time OHLCV data |
 | Notifications | Telegram Bot API | Alerts and bot commands |
-| AI Providers | OpenAI, Anthropic, Google Gemini, Groq | Stock analysis |
+| AI Providers | OpenAI, Anthropic, Google Gemini, Groq | Stock analysis + Agent decisions |
 | Technical Indicators | ta library | EMA, RSI, ATR calculations |
 | Scheduling | APScheduler | Market hours scheduling |
 | Data Storage | JSON files | Signal history, trade journal |
@@ -55,6 +57,7 @@ nse-trend-agent/
 │   └── ...
 ├── src/
 │   ├── main.py              # Entry point and scanner orchestration
+│   ├── agent_controller.py # Agentic AI - autonomous decision maker (v3.0)
 │   ├── data_fetcher.py      # Yahoo Finance data fetching
 │   ├── indicator_engine.py  # EMA, RSI, ATR calculations
 │   ├── trend_detector.py   # Trend strategy (EMA alignment)
@@ -449,7 +452,7 @@ Signal Generated → Logged to Journal → Active Monitoring
 → Factor Analysis → Filter Adaptation
 ```
 
-**Expiry:** 15 days from signal generation
+**Expiry:** 30 days from signal generation
 
 ### 5.2 Performance Tracker (`src/performance_tracker.py`)
 
@@ -956,7 +959,7 @@ groq>=0.4.0              # Groq Llama/Mixtral
 | JSON storage | Simplicity over SQL - suitable for 500-1000 trades |
 | 15-minute interval | Balance between signal freshness and API limits |
 | 5 signals max | Avoid signal overload |
-| 15-day expiry | Capture short-term moves |
+| 30-day expiry | Capture medium-term moves |
 | AI strict mode | AI suggests, human decides |
 | YFinance | Free and reliable, vs paid alternatives |
 
@@ -1070,8 +1073,131 @@ This software is for **educational purposes only**. Trading in financial markets
 
 ---
 
-**Document Version:** 2.2  
-**Last Updated:** 2026-04-13
+**Document Version:** 3.0  
+**Last Updated:** 2026-04-14
+
+---
+
+## 20. v3.0 Agentic AI Features (2026-04-14)
+
+### 20.1 Agent Controller Overview
+
+The Agentic AI transforms the scanner from a rule-based system into an autonomous agent that:
+
+| Feature | Description |
+|---------|-------------|
+| **LLM-Powered Decisions** | Uses LLM to analyze market conditions and decide actions |
+| **Market Regime Detection** | Classifies market as BULLISH/BEARISH/SIDEWAYS/VOLATILE |
+| **Dynamic Action Selection** | CHOOSE: SCAN/WAIT/ADJUST/MONITOR/ANALYZE |
+| **Self-Correction** | Tracks win/loss streaks, adjusts approach automatically |
+| **Natural Language Explanations** | Provides clear reasoning for every decision |
+| **State Management** | Maintains agent state with history, metrics, feedback |
+
+### 20.2 Agent Actions
+
+| Action | Description | When Used |
+|--------|-------------|------------|
+| `SCAN` | Execute normal signal scan | Default, favorable conditions |
+| `WAIT` | Skip this scan cycle | Unfavorable market conditions |
+| `ADJUST_STRATEGY` | Change strategy focus | When current strategy underperforming |
+| `MONITOR` | Focus on existing positions | High market risk |
+| `ANALYZE` | Deep dive analysis | On specific stocks or sectors |
+
+### 20.3 Agent Controller Architecture
+
+**File:** `src/agent_controller.py`
+
+| Component | Description |
+|-----------|-------------|
+| `AgentController` | Main class handling all agent logic |
+| `AgentAction` | Enum of possible actions |
+| `MarketRegime` | Enum of market conditions |
+| `AgentDecision` | Dataclass for decisions (action, confidence, reasoning) |
+| `AgentExplanation` | Natural language explanation wrapper |
+| `create_agent_controller()` | Factory function for instantiation |
+
+### 20.4 Agent Decision Process
+
+```
+1. Fetch Market Data
+   ├─ NIFTY 50 index data
+   ├─ Sector performance
+   ├─ Active signals
+   └─ Recent trade outcomes
+
+2. Analyze with LLM
+   ├─ System prompt: Expert trading agent instructions
+   ├─ Context: Market data, active trades, outcomes
+   └─ Output: JSON decision (action, confidence, reasoning)
+
+3. Execute Action
+   ├─ SCAN: Run signal detection
+   ├─ WAIT: Log skip reason, continue next cycle
+   ├─ ADJUST: Modify strategy focus
+   └─ MONITOR: Check active positions
+
+4. Track & Self-Correct
+   ├─ Record decision in agent state
+   ├─ Track win/loss streaks
+   └─ Adjust approach based on outcomes
+```
+
+### 20.5 Agent State Management
+
+The agent maintains state in `data/agent_state.json`:
+
+```json
+{
+  version: 3.0,
+  last_decision: {
+    action: SCAN,
+    confidence: 8,
+    reasoning: Market is bullish, NIFTY trending up,
+    market_regime: BULLISH,
+    timestamp: 2026-04-14T10:30:00
+  },
+  market_regime: BULLISH,
+  decision_history: [...],
+  feedback_history: [...],
+  streak: { wins: 3, losses: 1 },
+  strategy_adjustments: {...}
+}
+```
+
+### 20.6 Agent Integration in Main Loop
+
+The agent is integrated into `main.py`:
+
+```python
+# Agent Controller initialization
+self.agent_controller = create_agent_controller(
+    ai_analyzer=self.ai_analyzer,
+    market_context_engine=self.market_context
+)
+
+# Agent decision in scan loop
+agent_decision = self.agent_controller.analyze_and_decide(
+    market_data, active_signals
+)
+
+# Execute agent decision
+if agent_decision.action == AgentAction.WAIT:
+    logger.info(f Agent decided to WAIT: {agent_decision.reasoning})
+    return  # Skip this scan
+elif agent_decision.action == AgentAction.ADJUST_STRATEGY:
+    self.strategy = agent_decision.recommended_strategies[0]
+```
+
+### 20.7 Fallback Behavior
+
+If no LLM is available, the agent uses rule-based fallback:
+
+| Regime | Action | Strategy Focus |
+|--------|--------|----------------|
+| BULLISH | SCAN | TREND, MTF |
+| BEARISH | WAIT | None (avoid signals) |
+| SIDEWAYS | SCAN | VERC, MTF (avoid TREND) |
+| VOLATILE | WAIT | None (high risk) |
 
 ---
 
