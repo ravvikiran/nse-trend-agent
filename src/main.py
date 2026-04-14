@@ -42,6 +42,12 @@ from ai_rules_engine import create_ai_rules_engine
 # New MTF Strategy Module
 from mtf_strategy import MTFStrategyScanner, format_mtf_signal_alert, create_mtf_scanner
 
+# New Swing Trade Scanner
+from swing_trade_scanner import SwingTradeScanner, format_swing_signal_alert, create_swing_scanner
+
+# New Options Scanner
+from options_scanner import OptionsScanner, format_options_signal_alert, create_options_scanner
+
 # Trade Journal & Strategy Performance
 from trade_journal import create_trade_journal
 from strategy_optimizer import create_strategy_performance_tracker

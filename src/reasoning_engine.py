@@ -187,7 +187,7 @@ class ReasoningEngine:
         
         threshold_config = self.config.get('thresholds', {})
         self.thresholds = {**self.THRESHOLDS, **threshold_config}
-        
+    
         self._validate_weights()
         
         logger.info(f"ReasoningEngine initialized with weights: {self.weights}")
