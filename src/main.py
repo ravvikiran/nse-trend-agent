@@ -194,15 +194,6 @@ class NSETrendScanner:
         self.mtf_scanner = create_mtf_scanner()
         self.mtf_scanner.set_data_fetcher(self.data_fetcher)
         
-        # ==================== Trade Journal & Performance ====================
-        self.strategy_optimizer = create_strategy_performance_tracker(self.trade_journal)
-        
-        self.ai_learning_layer = create_ai_learning_layer(
-            self.trade_journal, 
-            self.strategy_optimizer,
-            self.ai_analyzer
-        )
-        
         # ==================== NEW: Factor Analyzer ====================
         self.factor_analyzer = create_factor_analyzer(self.trade_journal)
         
@@ -297,13 +288,18 @@ class NSETrendScanner:
                 logger.info("Settings loaded from config/settings.json")
                 
                 token = self.settings.get('telegram', {}).get('bot_token', '')
-                if token:
-                    env_token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
-                    if token != env_token:
-                        logger.warning(
-                            "Telegram token found in settings.json — "
-                            "prefer using TELEGRAM_BOT_TOKEN env var to avoid credential leak"
-                        )
+                env_token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+                
+                if token and not env_token:
+                    logger.warning(
+                        "Telegram token found in settings.json — "
+                        "prefer using TELEGRAM_BOT_TOKEN env var to avoid credential leak"
+                    )
+                
+                if token and env_token:
+                    self.settings['telegram']['bot_token'] = env_token
+                    logger.info("Using TELEGRAM_BOT_TOKEN from environment")
+                    
             except Exception as e:
                 logger.error(f"Error loading settings: {e}")
                 self.settings = {}
@@ -377,10 +373,10 @@ class NSETrendScanner:
             # Update statistics
             self.last_scan_time = datetime.now()
             scan_duration = (self.last_scan_time - scan_start).total_seconds()
+            logger.info(f"Scan #{self.total_scans} completed in {scan_duration:.2f}s")
             
         except Exception as e:
-            # Silently handle errors to keep scanner running
-            pass
+            logger.error(f"Error during scan: {e}", exc_info=True)
     
     def run_cycle(self):
         """
@@ -713,8 +709,14 @@ Loss: -{loss_pct:.1f}%
         
         target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
         
+        signal_dfs = {}
+        for signal in all_signals:
+            ticker = signal.ticker if hasattr(signal, 'ticker') else signal.stock_symbol
+            signal_dfs[signal] = stocks_data.get(ticker)
+        
         for signal in signals_to_send:
-            self._send_new_signal_alert(signal, target_method)
+            df = signal_dfs.get(signal)
+            self._send_new_signal_alert(signal, target_method, df)
         
         # Clear candidates after sending
         self._top5_candidates = []
@@ -738,7 +740,7 @@ Loss: -{loss_pct:.1f}%
         
         return round(base_score + quality_score, 2)
     
-    def _send_new_signal_alert(self, signal, target_method):
+    def _send_new_signal_alert(self, signal, target_method, df=None):
         """Send new signal alert in required format."""
         ticker = signal.ticker if hasattr(signal, 'ticker') else signal.stock_symbol
         strategy = signal.strategy_type
@@ -746,21 +748,37 @@ Loss: -{loss_pct:.1f}%
         if strategy == 'TREND':
             indicators = signal.indicators
             entry = indicators.get('close', 0)
-            ema50 = indicators.get('ema50', 0)
-            atr = indicators.get('atr', 0)
             
-            stop_loss = min(ema50, entry * 0.98) if ema50 > 0 else entry * 0.98
-            if atr > 0:
-                stop_loss = min(stop_loss, entry - (2 * atr))
+            chart_levels = self._calculate_targets_from_chart(df, entry, 'BUY') if df is not None else None
             
-            risk = entry - stop_loss
-            t1 = entry + (risk * 2)
-            t2 = entry + (risk * 3)
+            if chart_levels and chart_levels[0]:
+                stop_loss = chart_levels[0]
+                t1 = chart_levels[1]
+                t2 = chart_levels[2]
+            else:
+                ema50 = indicators.get('ema50', 0)
+                atr = indicators.get('atr', 0)
+                
+                stop_loss = min(ema50, entry * 0.98) if ema50 > 0 else entry * 0.98
+                if atr > 0:
+                    stop_loss = min(stop_loss, entry - (2 * atr))
+                
+                risk = entry - stop_loss
+                t1 = entry + (risk * 2)
+                t2 = entry + (risk * 3)
         else:
             entry = signal.entry_min if hasattr(signal, 'entry_min') else signal.current_price
-            stop_loss = signal.stop_loss
-            t1 = signal.target_1 if hasattr(signal, 'target_1') else 0
-            t2 = signal.target_2 if hasattr(signal, 'target_2') else 0
+            
+            chart_levels = self._calculate_targets_from_chart(df, entry, 'BUY') if df is not None else None
+            
+            if chart_levels and chart_levels[0]:
+                stop_loss = chart_levels[0]
+                t1 = chart_levels[1]
+                t2 = chart_levels[2]
+            else:
+                stop_loss = signal.stop_loss
+                t1 = signal.target_1 if hasattr(signal, 'target_1') else 0
+                t2 = signal.target_2 if hasattr(signal, 'target_2') else 0
         
         quality = getattr(signal, 'quality', 'B')
         score = getattr(signal, 'final_score', 0)
@@ -1292,34 +1310,47 @@ Loss: -{loss_pct:.1f}%
         else:
             return 'OPEN'
     
-    def _format_signal_for_telegram(self, signal, strategy_type: str, current_price: float = 0) -> str:
+    def _format_signal_for_telegram(self, signal, strategy_type: str, current_price: float = 0, df=None) -> str:
         """Format a new signal for Telegram - clean format."""
         if strategy_type == 'TREND':
             indicators = signal.indicators
             ticker = signal.ticker
             entry = indicators.get('close', 0)
-            ema50 = indicators.get('ema50', 0)
-            atr = indicators.get('atr', 0)
             
-            stop_loss = min(ema50, entry * 0.98) if ema50 > 0 else entry * 0.98
-            if atr > 0:
-                stop_loss = min(stop_loss, entry - (2 * atr))
+            chart_levels = self._calculate_targets_from_chart(df, entry, 'BUY') if df is not None else None
             
-            risk = entry - stop_loss
-            target_1 = entry + (risk * 2) if risk > 0 else entry * 1.1
-            target_2 = entry + (risk * 3) if risk > 0 else entry * 1.15
-            target_3 = entry + (risk * 4) if risk > 0 else entry * 1.2
+            if chart_levels and chart_levels[0]:
+                stop_loss = chart_levels[0]
+                target_1 = chart_levels[1]
+                target_2 = chart_levels[2]
+                target_3 = target_2 * 1.015 if target_2 > target_1 else target_2 * 0.985
+            else:
+                ema50 = indicators.get('ema_50', 0)
+                atr = indicators.get('atr', 0)
+                
+                stop_loss = min(ema50, entry * 0.98) if ema50 > 0 else entry * 0.98
+                if atr > 0:
+                    stop_loss = min(stop_loss, entry - (2 * atr))
+                
+                risk = entry - stop_loss
+                target_1 = entry + (risk * 2) if risk > 0 else entry * 1.1
+                target_2 = entry + (risk * 3) if risk > 0 else entry * 1.15
+                target_3 = entry + (risk * 4) if risk > 0 else entry * 1.2
             
             rsi = indicators.get('rsi_value', 0) or indicators.get('rsi', 0)
             volume_ratio = signal.volume_ratio if hasattr(signal, 'volume_ratio') else indicators.get('volume_ratio', 0)
-            score = signal.rank_score if hasattr(signal, 'rank_score') else signal.trend_score if hasattr(signal, 'trend_score') else 0
+            score = 0
+            if hasattr(signal, 'rank_score') and signal.rank_score is not None:
+                score = signal.rank_score
+            elif hasattr(signal, 'trend_score') and signal.trend_score is not None:
+                score = signal.trend_score
             current_price = entry
             
             return (
                 f"📈 {ticker}\n"
-                f"🎯 Entry: {entry:.0f}\n"
-                f"🛡️ SL: {stop_loss:.0f}\n"
-                f"🚀 Targets: {target_1:.0f} / {target_2:.0f} / {target_3:.0f}\n"
+                f"🎯 Entry: {entry:.2f}\n"
+                f"🛡️ SL: {stop_loss:.2f}\n"
+                f"🚀 Targets: {target_1:.2f} / {target_2:.2f} / {target_3:.2f}\n"
                 f"⭐ Score: {score:.1f}"
             )
         else:
@@ -1328,14 +1359,24 @@ Loss: -{loss_pct:.1f}%
             stop_loss = signal.stop_loss
             t1 = signal.target_1 if hasattr(signal, 'target_1') else 0
             t2 = signal.target_2 if hasattr(signal, 'target_2') else 0
-            t3 = signal.target_3 if hasattr(signal, 'target_3') else 0
-            score = signal.rank_score if hasattr(signal, 'rank_score') else signal.confidence_score if hasattr(signal, 'confidence_score') else 0
+            t3 = 0
+            if t1 > 0 and t2 > 0 and stop_loss > 0:
+                risk = entry - stop_loss
+                t3 = entry + (risk * 4)
+            
+            score = 0
+            if hasattr(signal, 'confidence_score') and signal.confidence_score is not None:
+                score = float(signal.confidence_score)
+            elif hasattr(signal, 'verc_score') and signal.verc_score is not None:
+                score = float(signal.verc_score)
+            elif hasattr(signal, 'rank_score') and signal.rank_score is not None:
+                score = signal.rank_score
             
             return (
                 f"📈 {ticker}\n"
-                f"🎯 Entry: {entry:.0f}\n"
-                f"🛡️ SL: {stop_loss:.0f}\n"
-                f"🚀 Targets: {t1:.0f} / {t2:.0f} / {t3:.0f}\n"
+                f"🎯 Entry: {entry:.2f}\n"
+                f"🛡️ SL: {stop_loss:.2f}\n"
+                f"🚀 Targets: {t1:.2f} / {t2:.2f} / {t3:.2f}\n"
                 f"⭐ Score: {score:.1f}"
             )
     
@@ -1353,7 +1394,7 @@ Loss: -{loss_pct:.1f}%
             f"Note: Already shared earlier"
         )
     
-    def _process_signal(self, signal, strategy_type: str, is_startup: bool = False) -> bool:
+    def _process_signal(self, signal, strategy_type: str, is_startup: bool = False, df=None) -> bool:
         """Process a signal: check if exists in journal or send as new."""
         from datetime import datetime
         
@@ -1395,25 +1436,53 @@ Loss: -{loss_pct:.1f}%
                     indicators = signal.indicators
                     current_price = indicators.get('close', 0)
                     entry = current_price
-                    ema50 = indicators.get('ema50', 0)
-                    atr = indicators.get('atr', 0)
                     
-                    stop_loss = min(ema50, entry * 0.98) if ema50 > 0 else entry * 0.98
-                    if atr > 0:
-                        stop_loss = min(stop_loss, entry - (2 * atr))
+                    chart_levels = self._calculate_targets_from_chart(df, entry, 'BUY') if df is not None else None
                     
-                    risk = entry - stop_loss
-                    target_1 = entry + (risk * 2)
-                    target_2 = entry + (risk * 3)
-                    target_3 = entry + (risk * 4)
-                    targets = [target_1, target_2, target_3]
+                    if chart_levels and chart_levels[0]:
+                        stop_loss = chart_levels[0]
+                        target_1 = chart_levels[1]
+                        target_2 = chart_levels[2]
+                        target_3 = target_2 * 1.015 if target_2 > target_1 else target_2 * 0.985
+                        targets = [target_1, target_2, target_3]
+                    else:
+                        ema50 = indicators.get('ema50', 0)
+                        atr = indicators.get('atr', 0)
+                        
+                        stop_loss = min(ema50, entry * 0.98) if ema50 > 0 else entry * 0.98
+                        if atr > 0:
+                            stop_loss = min(stop_loss, entry - (2 * atr))
+                        
+                        risk = entry - stop_loss
+                        target_1 = entry + (risk * 2)
+                        target_2 = entry + (risk * 3)
+                        target_3 = entry + (risk * 4)
+                        targets = [target_1, target_2, target_3]
                     
                     rsi = indicators.get('rsi_value', 0) or indicators.get('rsi', 0)
                     volume_ratio = signal.volume_ratio if hasattr(signal, 'volume_ratio') else indicators.get('volume_ratio', 0)
                 else:
                     entry = signal.entry_min if hasattr(signal, 'entry_min') else signal.current_price
-                    stop_loss = signal.stop_loss
-                    targets = [signal.target_1, signal.target_2, signal.target_3] if hasattr(signal, 'target_1') else []
+                    
+                    chart_levels = self._calculate_targets_from_chart(df, entry, 'BUY') if df is not None else None
+                    
+                    if chart_levels and chart_levels[0]:
+                        stop_loss = chart_levels[0]
+                        t1 = chart_levels[1]
+                        t2 = chart_levels[2]
+                        targets = [t1, t2] if t1 > 0 and t2 > 0 else []
+                        if t1 > 0 and t2 > 0 and stop_loss > 0:
+                            t3 = t2 * 1.015 if t2 > t1 else t2 * 0.985
+                            targets.append(t3)
+                    else:
+                        stop_loss = signal.stop_loss
+                        t1 = signal.target_1 if hasattr(signal, 'target_1') else 0
+                        t2 = signal.target_2 if hasattr(signal, 'target_2') else 0
+                        targets = [t1, t2] if t1 > 0 and t2 > 0 else []
+                        if t1 > 0 and t2 > 0 and stop_loss > 0:
+                            risk = entry - stop_loss
+                            t3 = entry + (risk * 4)
+                            targets.append(t3)
                     rsi = signal.rsi if hasattr(signal, 'rsi') else 0
                     volume_ratio = signal.relative_volume if hasattr(signal, 'relative_volume') else 0
                     current_price = signal.current_price if hasattr(signal, 'current_price') else entry
@@ -1438,7 +1507,7 @@ Loss: -{loss_pct:.1f}%
                     breakout_strength=getattr(signal, 'breakout_strength', 0)
                 )
                 
-                signal_msg = self._format_signal_for_telegram(signal, strategy_type, current_price)
+                signal_msg = self._format_signal_for_telegram(signal, strategy_type, current_price, df)
                 self.alert_service.send_alert(signal_msg)
                 self.total_signals += 1
                 logger.info(f"New signal sent for {ticker}: {trade_id}")
@@ -1527,8 +1596,10 @@ Loss: -{loss_pct:.1f}%
         final_signals = all_signals[:5]
         
         for signal in final_signals:
+            ticker = signal.ticker if hasattr(signal, 'ticker') else signal.stock_symbol
+            df = stocks_data.get(ticker) if stocks_data else None
             strategy_type = signal.strategy_type if hasattr(signal, 'strategy_type') and signal.strategy_type else 'TREND'
-            self._process_signal(signal, strategy_type, is_startup=True)
+            self._process_signal(signal, strategy_type, is_startup=True, df=df)
         
         logger.info(f"Startup scan complete - processed {len(final_signals)} signals")
     
@@ -1610,8 +1681,10 @@ Loss: -{loss_pct:.1f}%
         final_signals = all_signals[:5]
         
         for signal in final_signals:
+            ticker = signal.ticker if hasattr(signal, 'ticker') else signal.stock_symbol
+            df = stocks_data.get(ticker) if stocks_data else None
             strategy_type = signal.strategy_type if hasattr(signal, 'strategy_type') and signal.strategy_type else 'TREND'
-            self._process_signal(signal, strategy_type, is_startup=False)
+            self._process_signal(signal, strategy_type, is_startup=False, df=df)
         
         logger.info(f"3PM update complete - processed {len(final_signals)} signals")
     
@@ -1646,7 +1719,6 @@ Loss: -{loss_pct:.1f}%
         if df is None or len(df) < lookback:
             return None, None
         
-        # Check if required columns exist
         if 'high' not in df.columns or 'low' not in df.columns:
             return None, None
         
@@ -1658,6 +1730,103 @@ Loss: -{loss_pct:.1f}%
             return support, resistance
         except Exception:
             return None, None
+    
+    def _calculate_swing_levels(self, df, lookback=20):
+        """Calculate swing-based SL and target levels from chart.
+        
+        Returns:
+            dict with 'swing_low', 'swing_high', 'nearest_support', 'nearest_resistance', 'levels'
+        """
+        if df is None or len(df) < 10:
+            return None
+        
+        if 'high' not in df.columns or 'low' not in df.columns:
+            return None
+        
+        try:
+            recent = df.tail(lookback).copy()
+            highs = recent['high'].values
+            lows = recent['low'].values
+            current_price = recent['close'].iloc[-1]
+            
+            swing_highs = []
+            swing_lows = []
+            
+            for i in range(2, len(highs) - 2):
+                if highs[i] > highs[i-1] and highs[i] > highs[i+1] and \
+                   highs[i] > highs[i-2] and highs[i] > highs[i+2]:
+                    swing_highs.append(highs[i])
+                if lows[i] < lows[i-1] and lows[i] < lows[i+1] and \
+                   lows[i] < lows[i-2] and lows[i] < lows[i+2]:
+                    swing_lows.append(lows[i])
+            
+            if not swing_highs or not swing_lows:
+                return None
+            
+            recent_highs = swing_highs[-3:] if len(swing_highs) >= 3 else swing_highs
+            recent_lows = swing_lows[-3:] if len(swing_lows) >= 3 else swing_lows
+            
+            swing_high = max(recent_highs) if recent_highs else highs[-1]
+            swing_low = min(recent_lows) if recent_lows else lows[-1]
+            
+            supports = sorted([l for l in recent_lows if l < current_price], reverse=True)
+            resistances = sorted([h for h in recent_highs if h > current_price])
+            
+            nearest_support = supports[0] if supports else swing_low
+            nearest_resistance = resistances[0] if resistances else swing_high
+            
+            return {
+                'swing_high': swing_high,
+                'swing_low': swing_low,
+                'nearest_support': nearest_support,
+                'nearest_resistance': nearest_resistance,
+                'all_swing_highs': recent_highs,
+                'all_swing_lows': recent_lows,
+                'current_price': current_price
+            }
+        except Exception:
+            return None
+    
+    def _calculate_targets_from_chart(self, df, entry_price, direction='BUY'):
+        """Calculate SL and targets based on chart swing levels.
+        
+        For BUY: SL = nearest support/swing low, T1 = nearest resistance, T2 = next resistance
+        For SELL: SL = nearest resistance/swing high, T1 = nearest support, T2 = next support
+        """
+        levels = self._calculate_swing_levels(df)
+        
+        if levels is None:
+            return None, None, None, None
+        
+        swing_low = levels['swing_low']
+        swing_high = levels['swing_high']
+        nearest_support = levels['nearest_support']
+        nearest_resistance = levels['nearest_resistance']
+        all_highs = levels['all_swing_highs']
+        all_lows = levels['all_swing_lows']
+        
+        if direction == 'BUY':
+            stop_loss = nearest_support * 0.99
+            if swing_low < nearest_support:
+                stop_loss = min(stop_loss, swing_low * 0.99)
+            
+            target_1 = nearest_resistance
+            target_2 = all_highs[-2] if len(all_highs) >= 2 else nearest_resistance * 1.02
+            
+            if target_2 <= target_1:
+                target_2 = target_1 * 1.02
+        else:
+            stop_loss = nearest_resistance * 1.01
+            if swing_high > nearest_resistance:
+                stop_loss = max(stop_loss, swing_high * 1.01)
+            
+            target_1 = nearest_support
+            target_2 = all_lows[-2] if len(all_lows) >= 2 else nearest_support * 0.98
+            
+            if target_2 >= target_1:
+                target_2 = target_1 * 0.98
+        
+        return stop_loss, target_1, target_2, levels
     
     def _estimate_time_to_target(self, current_price, target_price, atr):
         """Estimate time to reach target based on ATR.
@@ -2141,8 +2310,14 @@ Loss: -{loss_pct:.1f}%"""
                 self._send_startup_no_signals_message()
                 return
             
+            signal_dfs = {}
             for signal in filtered_signals:
-                self._send_new_signal_alert(signal, target_method)
+                ticker = signal.ticker if hasattr(signal, 'ticker') else signal.stock_symbol
+                signal_dfs[signal] = stocks_data.get(ticker)
+            
+            for signal in filtered_signals:
+                df = signal_dfs.get(signal)
+                self._send_new_signal_alert(signal, target_method, df)
                 self._signals_sent_today += 1
             
             logger.info(f"Startup scan complete - Sent {len(filtered_signals)} signals")

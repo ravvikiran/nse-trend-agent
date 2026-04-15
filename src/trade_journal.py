@@ -491,6 +491,31 @@ class TradeJournal:
         strategy_trades = [t for t in self.trades if t.get('strategy') == strategy]
         return strategy_trades[-limit:] if limit > 0 else strategy_trades
     
+    def get_recent_trades(self, days: int = 30, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        Get trades from the last N days.
+        
+        Args:
+            days: Number of days to look back
+            limit: Maximum number of trades to return
+            
+        Returns:
+            List of trades from the specified period
+        """
+        cutoff = datetime.now() - timedelta(days=days)
+        recent_trades = []
+        
+        for trade in self.trades:
+            try:
+                timestamp = datetime.fromisoformat(trade.get('timestamp', ''))
+                if timestamp >= cutoff:
+                    recent_trades.append(trade)
+            except (ValueError, TypeError):
+                continue
+        
+        recent_trades.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+        return recent_trades[:limit] if limit > 0 else recent_trades
+    
     def check_expired_trades(self) -> List[Dict[str, Any]]:
         """Check for trades that exceeded expiry (10-15 days)."""
         expired = []

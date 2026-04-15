@@ -139,7 +139,7 @@ class SignalMemory:
         return []
     
     def _save_all_signals(self):
-        """Save all signals to memory."""
+        """Save all signals to memory (atomic write)."""
         filepath = self._get_all_signals_path()
         data = {
             'version': '1.0',
@@ -147,8 +147,10 @@ class SignalMemory:
             'signals': self.all_signals
         }
         try:
-            with open(filepath, 'w') as f:
+            tmp_path = filepath + ".tmp"
+            with open(tmp_path, 'w') as f:
                 json.dump(data, f, indent=2, default=str)
+            os.replace(tmp_path, filepath)
         except Exception as e:
             logger.error(f"Error saving all signals: {e}")
     

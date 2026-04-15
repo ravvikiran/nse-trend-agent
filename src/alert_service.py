@@ -694,8 +694,10 @@ The scanner runs every 15 minutes during market hours (9:15 AM - 3:30 PM IST).""
         delta = df['close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
+        rs = gain / loss.replace(0, float('nan'))
         rsi = (100 - (100 / (1 + rs))).iloc[-1]
+        if pd.isna(rsi):
+            rsi = 50  # Default to neutral when no losses
         
         # Determine trend
         if ema20 > ema50 > ema100:

@@ -94,9 +94,19 @@ class TrendDetector:
     def __init__(self):
         """Initialize the TrendDetector."""
         from indicator_engine import IndicatorEngine
+        from datetime import date
         self.engine = IndicatorEngine()
         self.alerted_today = set()
-        self.last_reset_date = None
+        self.last_reset_date = date.today()
+    
+    def _check_daily_reset(self):
+        """Automatically reset if new day."""
+        from datetime import date
+        today = date.today()
+        if self.last_reset_date != today:
+            self.alerted_today.clear()
+            self.last_reset_date = today
+            logger.info("Reset alerted_today for new trading day")
     
     def calculate_trend_score(self, indicators: Dict[str, Any]) -> Tuple[int, Dict[str, int]]:
         """
@@ -238,6 +248,8 @@ class TrendDetector:
             return None
 
         try:
+            self._check_daily_reset()
+            
             df = self.engine.calculate_indicators(df)
             indicators = self.engine.get_latest_indicators(df)
 
@@ -311,6 +323,8 @@ class TrendDetector:
         Returns:
             ScanResult containing signals and their scores
         """
+        self._check_daily_reset()
+        
         scan_a_signals = []
         scan_b_signals = []
         scored_signals = []

@@ -214,24 +214,23 @@ class MarketScheduler:
         with self._signal_lock:
             if key in self.last_signal_time:
                 stored_ts, _, _ = self.last_signal_time[key]
-                return self._check_cooldown_elapsed(key, stored_ts)
+                return self._check_cooldown_elapsed_locked(key, stored_ts)
             
             simple_key = symbol
             if simple_key in self.last_signal_time:
                 stored_ts, _, _ = self.last_signal_time[simple_key]
-                return self._check_cooldown_elapsed(key, stored_ts)
+                return self._check_cooldown_elapsed_locked(simple_key, stored_ts)
             
             return False
     
-    def _check_cooldown_elapsed(self, key: str, stored_ts: float) -> bool:
-        """Check if cooldown has elapsed for a specific key."""
+    def _check_cooldown_elapsed_locked(self, key: str, stored_ts: float) -> bool:
+        """Check if cooldown has elapsed for a specific key. Must be called with lock held."""
         elapsed = time.time() - stored_ts
         cooldown_seconds = self.cooldown_minutes * 60
         
         if elapsed >= cooldown_seconds:
-            with self._signal_lock:
-                if key in self.last_signal_time:
-                    del self.last_signal_time[key]
+            if key in self.last_signal_time:
+                del self.last_signal_time[key]
             return False
         
         logger.debug(f"{key} in cooldown: {elapsed/60:.1f} min elapsed")
@@ -240,17 +239,11 @@ class MarketScheduler:
     def record_signal(self, symbol: str, strategy_type: str = 'TREND', direction: str = 'BUY'):
         """Record that a signal was sent for this symbol with strategy and direction."""
         key = f"{symbol}_{strategy_type}_{direction}"
+        simple_key = symbol
         
         with self._signal_lock:
             self.last_signal_time[key] = (time.time(), strategy_type, direction)
-        
-        simple_key = symbol
-        if simple_key not in self.last_signal_time:
             self.last_signal_time[simple_key] = (time.time(), strategy_type, direction)
-        else:
-            old_ts, old_strat, old_dir = self.last_signal_time[simple_key]
-            if time.time() - old_ts > 0:
-                self.last_signal_time[simple_key] = (time.time(), strategy_type, direction)
         
         logger.debug(f"Signal recorded for {symbol} ({strategy_type} {direction})")
     
