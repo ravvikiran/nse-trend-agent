@@ -455,6 +455,7 @@ class MarketScheduler:
         """Schedule the scan jobs using APScheduler with CronTrigger."""
         scan_trigger = CronTrigger(
             minute='0,15,30,45',
+            day_of_week='0,1,2,3,4',
             timezone=self.ist
         )
         
@@ -469,6 +470,7 @@ class MarketScheduler:
         pm_trigger = CronTrigger(
             hour=self.PM_UPDATE_HOUR,
             minute=self.PM_UPDATE_MINUTE,
+            day_of_week='0,1,2,3,4',
             timezone=self.ist
         )
         
@@ -483,6 +485,7 @@ class MarketScheduler:
         am_trigger = CronTrigger(
             hour=self.AM_UPDATE_HOUR,
             minute=self.AM_UPDATE_MINUTE,
+            day_of_week='0,1,2,3,4',
             timezone=self.ist
         )
         
@@ -569,10 +572,11 @@ class MarketScheduler:
         logger.info(f"Continuous monitoring job scheduled: every {self.SCAN_INTERVAL} minutes")
     
     def add_signal_generation_job(self, func: Callable, job_id: str = 'signal_generator') -> None:
-        """Add signal generation job - runs once daily at 3:00 PM IST."""
+        """Add signal generation job - runs once daily at 3:00 PM IST on weekdays."""
         trigger = CronTrigger(
             hour=self.PM_UPDATE_HOUR,
             minute=self.PM_UPDATE_MINUTE,
+            day_of_week='0,1,2,3,4',
             timezone=self.ist
         )
         
@@ -584,7 +588,7 @@ class MarketScheduler:
             replace_existing=True
         )
         
-        logger.info(f"Signal generation job scheduled: {self.PM_UPDATE_HOUR}:{self.PM_UPDATE_MINUTE:02d} IST")
+        logger.info(f"Signal generation job scheduled: {self.PM_UPDATE_HOUR}:{self.PM_UPDATE_MINUTE:02d} IST on weekdays")
 
 
 def create_scheduler(scan_callback: Callable) -> MarketScheduler:

@@ -9,7 +9,7 @@ import argparse
 import logging
 import threading
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, time as dt_time
 from typing import Dict, Any, List, Optional
 import pandas as pd
 import pytz
@@ -381,19 +381,33 @@ class NSETrendScanner:
     def run_cycle(self):
         """
         Main cycle that runs every 15 minutes.
-        - ALWAYS RUN: Monitor active trades
+        - ONLY RUN DURING MARKET HOURS: Monitor active trades
         - ONLY RUN AT 3:00 PM: Signal generation
         """
         from datetime import datetime
         
         ist = pytz.timezone('Asia/Kolkata')
-        current_time = datetime.now(ist)
+        now = datetime.now(ist)
         
-        # ALWAYS RUN: Monitor active trades
+        # Skip weekends
+        if now.weekday() >= 5:
+            logger.debug("Weekend - skipping run_cycle")
+            return
+        
+        # Skip outside market hours
+        current_time = now.time()
+        market_open = dt_time(9, 15)
+        market_close = dt_time(15, 30)
+        
+        if not (market_open <= current_time <= market_close):
+            logger.debug("Outside market hours - skipping run_cycle")
+            return
+        
+        # ONLY DURING MARKET HOURS: Monitor active trades
         self.monitor_active_trades()
         
         # ONLY RUN AT 3:00 PM
-        if current_time.hour == 15 and current_time.minute == 0:
+        if now.hour == 15 and now.minute == 0:
             self.run_signal_generation()
     
     def monitor_active_trades(self):
@@ -542,6 +556,23 @@ Loss: -{loss_pct:.1f}%
         Monitors active signals, checks for SL/Target hits.
         Does NOT generate new signals - only tracks existing ones.
         """
+        import pytz
+        
+        ist = pytz.timezone('Asia/Kolkata')
+        now = datetime.now(ist)
+        
+        if now.weekday() >= 5:
+            logger.info("Weekend - skipping continuous monitoring")
+            return
+        
+        current_time = now.time()
+        market_open = dt_time(9, 15)
+        market_close = dt_time(15, 30)
+        
+        if not (market_open <= current_time <= market_close):
+            logger.debug("Outside market hours - skipping continuous monitoring")
+            return
+        
         try:
             self.monitor_active_trades()
         except Exception as e:
@@ -2347,6 +2378,15 @@ Loss: -{loss_pct:.1f}%"""
         # Skip on weekends
         if now.weekday() >= 5:
             logger.info("Weekend - skipping periodic scan")
+            return
+        
+        # Skip outside market hours
+        current_time = now.time()
+        market_open = dt_time(9, 15)
+        market_close = dt_time(15, 30)
+        
+        if not (market_open <= current_time <= market_close):
+            logger.debug("Outside market hours - skipping periodic scan")
             return
         
         logger.info("Running periodic scan (15 min interval)...")
