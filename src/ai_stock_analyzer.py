@@ -282,6 +282,112 @@ class GroqProvider(BaseLLMProvider):
         return response.choices[0].message.content
 
 
+class OllamaProvider(BaseLLMProvider):
+    """Ollama local LLM provider."""
+    
+    def __init__(self, base_url: str = None, model: str = "llama3"):
+        super().__init__("Ollama")
+        self.base_url = base_url or os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        self.model = model
+        self.client = None
+        self._init_client()
+    
+    def _init_client(self):
+        try:
+            import httpx
+            self.client = httpx.Client(base_url=self.base_url, timeout=30.0)
+            resp = self.client.get("/api/tags")
+            self._available = resp.status_code == 200
+        except Exception:
+            self._available = False
+    
+    def is_available(self) -> bool:
+        return getattr(self, '_available', False)
+    
+    def generate(self, messages: List[Dict], **kwargs) -> str:
+        if not self.is_available():
+            raise Exception("Ollama not available")
+        
+        import httpx
+        client = httpx.Client(base_url=self.base_url, timeout=60.0)
+        
+        prompt = ""
+        for msg in messages:
+            if msg["role"] == "system":
+                prompt += f"System: {msg['content']}\n"
+            else:
+                prompt += f"User: {msg['content']}\n"
+        
+        response = client.post(
+            "/api/generate",
+            json={
+                "model": self.model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": kwargs.get("temperature", 0.7),
+                    "num_predict": kwargs.get("max_tokens", 1000)
+                }
+            }
+        )
+        return response.json().get("response", "")
+
+
+class MiniMaxProvider(BaseLLMProvider):
+    """MiniMax AI provider."""
+    
+    def __init__(self, api_key: str = None, model: str = "abab6.5s-chat"):
+        super().__init__("MiniMax")
+        self.api_key = api_key or os.environ.get("MINIMAX_API_KEY")
+        self.model = model
+        self.client = None
+        self._init_client()
+    
+    def _init_client(self):
+        if self.api_key:
+            try:
+                import httpx
+                self.client = httpx.Client(
+                    base_url="https://api.minimax.chat",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    timeout=60.0
+                )
+                self._available = True
+            except Exception:
+                self._available = False
+    
+    def is_available(self) -> bool:
+        return getattr(self, '_available', False)
+    
+    def generate(self, messages: List[Dict], **kwargs) -> str:
+        if not self.is_available():
+            raise Exception("MiniMax not available")
+        
+        import httpx
+        client = httpx.Client(
+            base_url="https://api.minimax.chat",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            },
+            timeout=60.0
+        )
+        
+        response = client.post(
+            "/v1/text/chatcompletion_v2",
+            json={
+                "model": self.model,
+                "messages": messages,
+                "temperature": kwargs.get("temperature", 0.7),
+                "max_tokens": kwargs.get("max_tokens", 1000)
+            }
+        )
+        return response.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+
+
 class MultiProviderAIAnalyzer:
     """
     Multi-provider AI analyzer with automatic fallback.
@@ -294,35 +400,47 @@ class MultiProviderAIAnalyzer:
     
     def _init_providers(self):
         """Initialize all available providers."""
-        # Initialize providers based on available API keys
         
-        # OpenAI (default)
-        openai_key = os.environ.get("OPENAI_API_KEY")
-        openai_model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-        if openai_key:
-            self.providers.append(OpenAIProvider(openai_key, openai_model))
-            logger.info("OpenAI provider initialized")
-        
-        # Groq (free tier available)
+        # Groq (first priority)
         groq_key = os.environ.get("GROQ_API_KEY")
         groq_model = os.environ.get("GROQ_MODEL", "llama-3.1-70b-versatile")
         if groq_key:
             self.providers.append(GroqProvider(groq_key, groq_model))
             logger.info("Groq provider initialized")
         
-        # Anthropic
+        # Google Gemini (second priority)
+        google_key = os.environ.get("GOOGLE_API_KEY")
+        google_model = os.environ.get("GOOGLE_MODEL", "gemini-1.5-flash")
+        if google_key:
+            self.providers.append(GoogleGeminiProvider(google_key, google_model))
+            logger.info("Google Gemini provider initialized")
+        
+        # OpenAI (third priority)
+        openai_key = os.environ.get("OPENAI_API_KEY")
+        openai_model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+        if openai_key:
+            self.providers.append(OpenAIProvider(openai_key, openai_model))
+            logger.info("OpenAI provider initialized")
+        
+        # Anthropic (fourth priority)
         anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
         anthropic_model = os.environ.get("ANTHROPIC_MODEL", "claude-3-haiku-20240307")
         if anthropic_key:
             self.providers.append(AnthropicProvider(anthropic_key, anthropic_model))
             logger.info("Anthropic provider initialized")
         
-        # Google Gemini
-        google_key = os.environ.get("GOOGLE_API_KEY")
-        google_model = os.environ.get("GOOGLE_MODEL", "gemini-1.5-flash")
-        if google_key:
-            self.providers.append(GoogleGeminiProvider(google_key, google_model))
-            logger.info("Google Gemini provider initialized")
+        # MiniMax (fifth priority)
+        minimax_key = os.environ.get("MINIMAX_API_KEY")
+        minimax_model = os.environ.get("MINIMAX_MODEL", "abab6.5s-chat")
+        if minimax_key:
+            self.providers.append(MiniMaxProvider(minimax_key, minimax_model))
+            logger.info("MiniMax provider initialized")
+        
+        # Ollama (sixth priority - local)
+        ollama_model = os.environ.get("OLLAMA_MODEL", "llama3")
+        ollama_base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        self.providers.append(OllamaProvider(ollama_base_url, ollama_model))
+        logger.info("Ollama provider initialized")
         
         logger.info(f"Initialized {len(self.providers)} AI providers")
     
