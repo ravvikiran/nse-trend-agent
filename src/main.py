@@ -965,12 +965,12 @@ Loss: -{loss_pct:.1f}%
         
         if self.strategy in ['trend', 'all']:
             trend_signals = self._get_trend_signals(stocks_data)
-for signal in trend_signals:
+            for signal in trend_signals:
                 if signal.ticker not in excluded_stocks:
                     signal.strategy_type = 'TREND'
                     signal.strategy_score = signal.trend_score if hasattr(signal, 'trend_score') else 0
                     
-if signal.strategy_score < 6:
+                    if signal.strategy_score < 6:
                         logger.debug(f"Skipping {signal.ticker}: score {signal.strategy_score} < 6")
                         continue
                     
