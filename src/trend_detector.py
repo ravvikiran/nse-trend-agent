@@ -408,10 +408,12 @@ class TrendDetector:
         scored_signals.sort(key=lambda x: x.trend_score, reverse=True)
         scan_a_signals.sort(key=lambda x: x.trend_score, reverse=True)
         
+        passing_signals = [s for s in scored_signals if s.trend_score >= self.MIN_SCORE]
+        
         return ScanResult(
             scan_a=scan_a_signals,
             scan_b=scan_b_signals,
-            intersection=scored_signals[:5]  # Top 5 max
+            intersection=passing_signals[:5]  # Top 5 with score >= 6
         )
     
     def should_alert(self, ticker: str) -> bool:

@@ -614,6 +614,10 @@ Loss: -{loss_pct:.1f}%
                     for signal in trend_signals:
                         signal.strategy_type = 'TREND'
                         signal.strategy_score = signal.trend_score if hasattr(signal, 'trend_score') else 0
+                        
+                        if signal.strategy_score < 6:
+                            continue
+                        
                         signal.volume_ratio = signal.indicators.get('volume_ratio', 0)
                         signal.breakout_strength = self._calculate_breakout_strength(signal.indicators)
                         
@@ -930,12 +934,16 @@ Loss: -{loss_pct:.1f}%
         
         if self.strategy in ['trend', 'all']:
             trend_signals = self._get_trend_signals(stocks_data)
-            for signal in trend_signals:
+for signal in trend_signals:
                 if signal.ticker not in excluded_stocks:
-                    df = stocks_data.get(signal.ticker)
-                    
                     signal.strategy_type = 'TREND'
                     signal.strategy_score = signal.trend_score if hasattr(signal, 'trend_score') else 0
+                    
+if signal.strategy_score < 6:
+                        logger.debug(f"Skipping {signal.ticker}: score {signal.strategy_score} < 6")
+                        continue
+                    
+                    df = stocks_data.get(signal.ticker)
                     signal.volume_ratio = signal.indicators.get('volume_ratio', 0)
                     signal.breakout_strength = self._calculate_breakout_strength(signal.indicators)
                     
@@ -1744,6 +1752,7 @@ Loss: -{loss_pct:.1f}%
             return None
         
         try:
+            lookback = min(lookback, len(df))
             recent = df.tail(lookback).copy()
             highs = recent['high'].values
             lows = recent['low'].values
@@ -1760,17 +1769,22 @@ Loss: -{loss_pct:.1f}%
                    lows[i] < lows[i-2] and lows[i] < lows[i+2]:
                     swing_lows.append(lows[i])
             
-            if not swing_highs or not swing_lows:
+            if not swing_highs and not swing_lows:
                 return None
             
             recent_highs = swing_highs[-3:] if len(swing_highs) >= 3 else swing_highs
             recent_lows = swing_lows[-3:] if len(swing_lows) >= 3 else swing_lows
             
-            swing_high = max(recent_highs) if recent_highs else highs[-1]
-            swing_low = min(recent_lows) if recent_lows else lows[-1]
+            swing_high = max(recent_highs) if recent_highs else max(highs[-3:])
+            swing_low = min(recent_lows) if recent_lows else min(lows[-3:])
             
             supports = sorted([l for l in recent_lows if l < current_price], reverse=True)
             resistances = sorted([h for h in recent_highs if h > current_price])
+            
+            if not supports:
+                supports = sorted([l for l in lows if l < current_price], reverse=True)[:3]
+            if not resistances:
+                resistances = sorted([h for h in highs if h > current_price])[:3]
             
             nearest_support = supports[0] if supports else swing_low
             nearest_resistance = resistances[0] if resistances else swing_high
