@@ -48,6 +48,9 @@ from swing_trade_scanner import SwingTradeScanner, format_swing_signal_alert, cr
 # New Options Scanner
 from options_scanner import OptionsScanner, format_options_signal_alert, create_options_scanner
 
+# Enhanced Signal Validation
+from signal_validator_enhanced import create_enhanced_validator
+
 # Trade Journal & Strategy Performance
 from trade_journal import create_trade_journal
 from strategy_optimizer import create_strategy_performance_tracker
@@ -210,6 +213,12 @@ class NSETrendScanner:
         
         # ==================== Trade Validator ====================
         self.trade_validator = create_trade_validator(self.settings)
+        
+        # ==================== Enhanced Signal Validator ====================
+        # Validates signals before sending: score, technical patterns, AI approval, SL checks
+        min_signal_score = self.settings.get('signal_validation', {}).get('min_score', 6.0)
+        self.signal_validator = create_enhanced_validator(min_signal_score, self.ai_analyzer)
+        logger.info(f"Initialized Enhanced Signal Validator with min score: {min_signal_score}")
         
         # ==================== Agent Controller (Agentic AI) ====================
         self.agent_controller = create_agent_controller(
@@ -757,6 +766,20 @@ Loss: -{loss_pct:.1f}%
                     if confidence < self.confidence_threshold:
                         continue
                     
+                    # ==================== NEW: ENHANCED VALIDATION ====================
+                    # Validate technical patterns, AI approval, and stop loss
+                    df = stocks_data.get(ticker)
+                    is_valid, validation_reason = self.signal_validator.validate_signal_before_sending(
+                        signal,
+                        df=df,
+                        use_ai=True
+                    )
+                    
+                    if not is_valid:
+                        logger.info(f"Signal {ticker} rejected: {validation_reason}")
+                        continue
+                    
+                    logger.info(f"Signal {ticker} passed enhanced validation: {validation_reason}")
                     signals_to_send.append(signal)
                     self._signals_sent_today += 1
                     
@@ -1573,6 +1596,21 @@ Loss: -{loss_pct:.1f}%
                     'trend_score': signal.trend_score if hasattr(signal, 'trend_score') else 0,
                     'rank_score': signal.rank_score if hasattr(signal, 'rank_score') else 0
                 }
+                
+                # ==================== NEW: ENHANCED SIGNAL VALIDATION ====================
+                # Validate signal before sending alert
+                is_valid, validation_reason = self.signal_validator.validate_signal_before_sending(
+                    signal, 
+                    df=df,
+                    use_ai=True  # Use AI to validate
+                )
+                
+                if not is_valid:
+                    logger.warning(f"Signal {ticker} rejected by validator: {validation_reason}")
+                    return False
+                
+                logger.info(f"Signal {ticker} passed validation: {validation_reason}")
+                
                 trade_id = self.trade_journal.log_signal(
                     ticker,
                     strategy_type,
@@ -2384,6 +2422,20 @@ Loss: -{loss_pct:.1f}%"""
                     logger.info(f"Skipping {ticker}: confidence {confidence} < threshold {self.confidence_threshold}")
                     continue
                 
+                # ==================== NEW: ENHANCED VALIDATION ====================
+                # Additional validation: technical patterns, AI approval, stop loss checks
+                df = stocks_data.get(ticker)
+                is_valid, validation_reason = self.signal_validator.validate_signal_before_sending(
+                    signal,
+                    df=df,
+                    use_ai=True  # Use AI for validation
+                )
+                
+                if not is_valid:
+                    logger.info(f"Skipping {ticker}: {validation_reason}")
+                    continue
+                
+                logger.info(f"Signal {ticker} passed enhanced validation: {validation_reason}")
                 filtered_signals.append(signal)
             
             filtered_signals = filtered_signals[:self.max_signals_per_day]
