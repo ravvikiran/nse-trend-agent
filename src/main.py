@@ -68,19 +68,23 @@ from agent_controller import create_agent_controller, AgentAction
 
 
 def setup_logging(log_level='INFO', log_file='logs/scanner.log'):
-    """Setup logging configuration."""
-    # Create logs directory if it doesn't exist using Path
-    log_path = Path(log_file)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    """Setup logging configuration. In Railway, only use stdout."""
+    # Check if running on Railway (ephemeral filesystem)
+    is_railway = os.environ.get('RAILWAY_ENVIRONMENT_ID') is not None
+    
+    handlers: List[Any] = [logging.StreamHandler()]
+    
+    # Only create file handler if not on Railway
+    if not is_railway:
+        log_path = Path(log_file)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(log_file))
     
     # Configure root logger
     logging.basicConfig(
         level=getattr(logging, log_level),
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler()
-        ]
+        handlers=handlers
     )
     
     # Suppress verbose libraries
@@ -242,8 +246,18 @@ class NSETrendScanner:
         warnings.filterwarnings('ignore')
     
     def _load_config(self):
-        """Load stock configuration from JSON file."""
+        """Load stock configuration from JSON file or environment variable."""
         import json
+        
+        # First, try environment variable (Railway uses this)
+        env_stocks = os.environ.get('STOCKS_LIST')
+        if env_stocks:
+            try:
+                self.stocks = json.loads(env_stocks)
+                logger.info(f"Loaded {len(self.stocks)} stocks from STOCKS_LIST environment variable")
+                return
+            except json.JSONDecodeError:
+                logger.warning("Invalid JSON in STOCKS_LIST environment variable")
         
         config_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -256,25 +270,34 @@ class NSETrendScanner:
                 'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK',
                 'SBIN', 'BHARTIARTL', 'LT', 'BAJFINANCE', 'HINDUNILVR'
             ]
+            logger.info(f"Config file not found at {config_path}, using default Nifty 50 stocks")
             return
         
-        with open(config_path, 'r') as f:
-            config = json.load(f)
-        
-        # Config can be a list of stocks or a dict with 'stocks' key
-        if isinstance(config, list):
-            self.stocks = config
-        else:
-            # Get stock list from config
-            self.stocks = config.get('stocks', [])
+        try:
+            with open(config_path, 'r') as f:
+                config = json.load(f)
             
-            # Also check for groups
-            if 'groups' in config:
-                for group in config['groups'].values():
-                    self.stocks.extend(group)
-        
-        # Remove duplicates
-        self.stocks = list(set(self.stocks))
+            # Config can be a list of stocks or a dict with 'stocks' key
+            if isinstance(config, list):
+                self.stocks = config
+            else:
+                # Get stock list from config
+                self.stocks = config.get('stocks', [])
+                
+                # Also check for groups
+                if 'groups' in config:
+                    for group in config['groups'].values():
+                        self.stocks.extend(group)
+            
+            # Remove duplicates
+            self.stocks = list(set(self.stocks))
+            logger.info(f"Loaded {len(self.stocks)} stocks from {config_path}")
+        except Exception as e:
+            logger.error(f"Error loading config from {config_path}: {e}. Using defaults.")
+            self.stocks = [
+                'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK',
+                'SBIN', 'BHARTIARTL', 'LT', 'BAJFINANCE', 'HINDUNILVR'
+            ]
     
     def _load_settings(self):
         """Load settings from JSON file."""
@@ -2776,16 +2799,36 @@ def main():
     
     # Handle --schedule mode (new combined scheduler + bot mode)
     if args.schedule:
-        # Load full config
+        # Load full config - try file first, then environment variables
         import json
+        logger = logging.getLogger(__name__)
+        config = None
         settings_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             'config/settings.json'
         )
-        with open(settings_path, 'r') as f:
-            config = json.load(f)
         
-        logger = logging.getLogger(__name__)
+        # Try to load from file
+        if os.path.exists(settings_path):
+            try:
+                with open(settings_path, 'r') as f:
+                    config = json.load(f)
+                logger.info(f"Loaded settings from {settings_path}")
+            except Exception as e:
+                logger.error(f"Error loading settings from file: {e}")
+        
+        # If no config from file, use environment variables
+        if config is None:
+            config = {
+                'telegram': {
+                    'bot_token': os.environ.get('TELEGRAM_BOT_TOKEN', ''),
+                    'chat_id': os.environ.get('TELEGRAM_CHAT_ID', ''),
+                    'channel_chat_id': os.environ.get('TELEGRAM_CHANNEL_CHAT_ID', '')
+                },
+                'stocks_file': os.environ.get('STOCKS_FILE', 'config/stocks.json')
+            }
+            logger.info("Using configuration from environment variables")
+        
         run_scheduled(config, logger)
         return
     
