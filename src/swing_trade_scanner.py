@@ -221,7 +221,8 @@ class SwingTradeScanner:
             if close > ema_200:
                 return True
             return False
-        except:
+        except Exception as e:
+            logger.warning(f"Error checking NIFTY EMA trend: {e}")
             return True
     
     def get_delivery_percent(self, ticker: str) -> float:
@@ -235,7 +236,8 @@ class SwingTradeScanner:
             info = stock.info
             
             return info.get('deliveryToChartRatio', 0) * 100
-        except:
+        except Exception as e:
+            logger.warning(f"Error fetching delivery percent for {ticker}: {e}")
             return 50.0
     
     def scan_stock(

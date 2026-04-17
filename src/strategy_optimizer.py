@@ -162,7 +162,8 @@ class StrategyPerformanceTracker:
                 days = (end - start).days
                 if days >= 0:
                     holding_times.append(days)
-            except:
+            except (ValueError, TypeError) as e:
+                logger.debug(f"Error calculating holding time: {e}")
                 pass
         
         avg_holding = sum(holding_times) / len(holding_times) if holding_times else 0

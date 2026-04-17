@@ -866,7 +866,8 @@ class ReasoningEngine:
             rr = reward / risk if risk > 0 else 0
             if rr < 1.5:
                 failed_checks.append('low_rr')
-        except:
+        except (AttributeError, TypeError, ZeroDivisionError) as e:
+            logger.debug(f"Error calculating risk/reward: {e}")
             pass
         
         volume = indicators.get('volume', 0)

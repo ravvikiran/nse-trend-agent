@@ -117,7 +117,12 @@ class NSETrendScanner:
         else:
             # Prefer channel chat ID over personal chat ID
             target_chat_id = telegram_channel_chat_id or telegram_chat_id
-            self.alert_service = AlertService(telegram_token, target_chat_id, telegram_channel_chat_id)
+            # Validate telegram configuration
+            if telegram_token and target_chat_id:
+                self.alert_service = AlertService(telegram_token, target_chat_id, telegram_channel_chat_id or '')
+            else:
+                logger.warning("Telegram configuration incomplete (missing token or chat ID), alerts disabled")
+                self.alert_service = MockAlertService()
         
         # Initialize AI analyzer
         self.ai_analyzer = create_analyzer()
@@ -816,7 +821,7 @@ Loss: -{loss_pct:.1f}%
                 t2 = signal.target_2 if hasattr(signal, 'target_2') else 0
         
         quality = getattr(signal, 'quality', 'B')
-        score = getattr(signal, 'final_score', 0)
+        score = getattr(signal, 'final_score', None) or getattr(signal, 'rank_score', None) or getattr(signal, 'trend_score', 0)
         
         sl_pct = ((entry - stop_loss) / entry) * 100
         t1_pct = ((t1 - entry) / entry) * 100
@@ -842,7 +847,7 @@ Loss: -{loss_pct:.1f}%
             direction="BUY",
             entry=entry,
             stop_loss=stop_loss,
-            targets=[t1, t2],
+            targets=[float(t1) if t1 else 0.0, float(t2) if t2 else 0.0],
             indicators={
                 'volume_ratio': signal.volume_ratio,
                 'final_score': score
@@ -1007,6 +1012,7 @@ Loss: -{loss_pct:.1f}%
                     else:
                         signal.rank_score = signal.base_rank_score
                     
+                    signal.final_score = self._calculate_final_score(signal)
                     signal.market_context = market_context
                     
                     signal.quality = TradeJournal.calculate_quality(
@@ -1016,7 +1022,8 @@ Loss: -{loss_pct:.1f}%
                     )
                     
                     if self._check_no_trade_zone(signal, stocks_data.get(signal.ticker), market_context):
-                        logger.info(f"Signal {signal.ticker} rejected by no-trade zone: {signal.get('rejection_reason', 'N/A')}")
+                        rejection_reason = getattr(signal, 'rejection_reason', 'N/A')
+                        logger.info(f"Signal {signal.ticker} rejected by no-trade zone: {rejection_reason}")
                         continue
                     
                     logger.info(f"Signal accepted: {signal.ticker} | strategy: {signal.strategy_type} | score: {signal.rank_score:.2f} | quality: {signal.quality} | market_context: {signal.market_context}")
@@ -1040,6 +1047,7 @@ Loss: -{loss_pct:.1f}%
                     signal.base_rank_score = self._calculate_base_rank_score(signal)
                     
                     signal.rank_score = signal.base_rank_score
+                    signal.final_score = self._calculate_final_score(signal)
                     signal.market_context = market_context
                     
                     signal.quality = TradeJournal.calculate_quality(
@@ -1049,7 +1057,8 @@ Loss: -{loss_pct:.1f}%
                     )
                     
                     if self._check_no_trade_zone(signal, stocks_data.get(signal.stock_symbol), market_context):
-                        logger.info(f"Signal {signal.stock_symbol} rejected by no-trade zone: {signal.get('rejection_reason', 'N/A')}")
+                        rejection_reason = getattr(signal, 'rejection_reason', 'N/A')
+                        logger.info(f"Signal {signal.stock_symbol} rejected by no-trade zone: {rejection_reason}")
                         continue
                     
                     logger.info(f"Signal accepted: {signal.stock_symbol} | strategy: {signal.strategy_type} | score: {signal.rank_score:.2f} | quality: {signal.quality} | market_context: {signal.market_context}")
@@ -1362,7 +1371,11 @@ Loss: -{loss_pct:.1f}%
                 stop_loss = chart_levels[0]
                 target_1 = chart_levels[1]
                 target_2 = chart_levels[2]
-                target_3 = target_2 * 1.015 if target_2 > target_1 else target_2 * 0.985
+                # Safely calculate target_3 with None checks
+                if target_2 and target_1 and isinstance(target_2, (int, float)) and isinstance(target_1, (int, float)):
+                    target_3 = target_2 * 1.015 if target_2 > target_1 else target_2 * 0.985
+                else:
+                    target_3 = target_2 if target_2 else entry * 1.2
             else:
                 ema50 = indicators.get('ema_50', 0)
                 atr = indicators.get('atr', 0)

@@ -326,7 +326,8 @@ Be specific and actionable in your recommendations."""
                 current = self.strategy_performance.get_current_filters()
                 if current:
                     old_filters = current
-            except:
+            except Exception as e:
+                logger.debug(f"Error getting current filters: {e}")
                 pass
         
         new_filters = self.strategy_performance.adapt_filters(analysis)

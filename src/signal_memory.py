@@ -236,7 +236,8 @@ class SignalMemory:
                         if added_at > cutoff:
                             logger.debug(f"Duplicate signal for {setup_key}: active signal exists")
                             return True
-                    except:
+                    except (ValueError, KeyError) as e:
+                        logger.debug(f"Error parsing active signal date: {e}")
                         pass
             else:
                 if sig.get('stock_symbol') == stock_symbol:
@@ -245,7 +246,8 @@ class SignalMemory:
                         if added_at > cutoff:
                             logger.debug(f"Duplicate signal for {stock_symbol}: active signal exists")
                             return True
-                    except:
+                    except (ValueError, KeyError) as e:
+                        logger.debug(f"Error parsing active signal date: {e}")
                         pass
         
         for sig in self.all_signals:
@@ -257,7 +259,8 @@ class SignalMemory:
                         if generated_at > cutoff:
                             logger.debug(f"Duplicate signal for {setup_key}: recent signal in memory")
                             return True
-                    except:
+                    except (ValueError, KeyError) as e:
+                        logger.debug(f"Error parsing signal date: {e}")
                         pass
             else:
                 if sig.get('stock_symbol') == stock_symbol and sig.get('signal_type') == signal_type:
@@ -266,7 +269,8 @@ class SignalMemory:
                         if generated_at > cutoff:
                             logger.debug(f"Duplicate signal for {stock_symbol}: recent signal in memory")
                             return True
-                    except:
+                    except (ValueError, KeyError) as e:
+                        logger.debug(f"Error parsing signal date: {e}")
                         pass
         
         return False
@@ -306,7 +310,8 @@ class SignalMemory:
                     days_since = (datetime.now() - generated_at).days
                     status['days_since_last_signal'] = days_since
                     status['recent_outcome'] = sig.get('outcome')
-                except:
+                except (ValueError, TypeError) as e:
+                    logger.debug(f"Error processing signal outcome: {e}")
                     pass
         
         return status
@@ -777,7 +782,8 @@ class SignalMemory:
             
             if days_active > 10:
                 return 'timeout'
-        except:
+        except (ValueError, TypeError) as e:
+            logger.debug(f"Error calculating signal age: {e}")
             pass
         return None
     
@@ -821,7 +827,8 @@ class SignalMemory:
                 completed_at = datetime.fromisoformat(outcome.get('completed_at', ''))
                 if completed_at > cutoff:
                     context.recent_outcomes.append(outcome)
-            except:
+            except (ValueError, TypeError) as e:
+                logger.debug(f"Error parsing outcome date: {e}")
                 pass
         
         completed = [o for o in self.outcomes if o.get('outcome') == 'TARGET_HIT']

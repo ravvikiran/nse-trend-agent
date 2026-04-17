@@ -420,7 +420,8 @@ class PerformanceTracker:
                     completed = datetime.fromisoformat(s['completed_at'])
                     if completed >= cutoff:
                         recent_signals.append(s)
-            except:
+            except (ValueError, KeyError, TypeError) as e:
+                logger.debug(f"Error parsing signal timestamp: {e}")
                 pass
         
         if len(recent_signals) < 5:
@@ -682,7 +683,8 @@ class PerformanceTracker:
                     completed = datetime.fromisoformat(s['completed_at'])
                     if completed >= cutoff:
                         recent_signals.append(s)
-            except:
+            except (ValueError, KeyError, TypeError) as e:
+                logger.debug(f"Error parsing signal timestamp in factor analysis: {e}")
                 pass
         
         if len(recent_signals) < 5:
@@ -895,7 +897,8 @@ class PerformanceTracker:
                     completed = datetime.fromisoformat(s['completed_at'])
                     if completed >= cutoff:
                         recent_signals.append(s)
-            except:
+            except (ValueError, KeyError, TypeError) as e:
+                logger.debug(f"Error parsing SIQ signal timestamp: {e}")
                 pass
         
         if not recent_signals:
@@ -1041,7 +1044,8 @@ class PerformanceTracker:
                     
                     if days >= 0:
                         days_to_resolution.append(days)
-                except:
+                except (ValueError, TypeError) as e:
+                    logger.debug(f"Error calculating days to resolution: {e}")
                     pass
         
         if not days_to_resolution:
@@ -1136,7 +1140,8 @@ class PerformanceTracker:
                     completed = datetime.fromisoformat(s.get('completed_at', ''))
                     if start_date <= completed < end_date:
                         period_signals.append(s)
-                except:
+                except (ValueError, KeyError, TypeError) as e:
+                    logger.debug(f"Error filtering signals by period: {e}")
                     pass
             
             if period_signals:

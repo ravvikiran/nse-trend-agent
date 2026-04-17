@@ -396,7 +396,8 @@ class SignalTracker:
                 last_time = datetime.fromisoformat(last_checked)
                 if (now - last_time).total_seconds() >= check_interval_hours * 3600:
                     to_check.append(signal)
-            except:
+            except (ValueError, TypeError) as e:
+                logger.debug(f"Error checking signal timestamp: {e}")
                 to_check.append(signal)
         
         to_check.sort(key=lambda s: self.calculate_priority(s), reverse=True)

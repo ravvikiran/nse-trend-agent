@@ -190,7 +190,8 @@ class OptionsScanner:
                 'oi_change_pct': 0.0,
                 'oi_direction': 'NEUTRAL'
             }
-        except:
+        except Exception as e:
+            logger.warning(f"Error calculating OI: {e}")
             return {
                 'total_oi': 0,
                 'oi_change_pct': 0.0,
@@ -207,7 +208,8 @@ class OptionsScanner:
         """
         try:
             return 1.0, "NEUTRAL"
-        except:
+        except Exception as e:
+            logger.warning(f"Error calculating PCR: {e}")
             return 1.0, "NEUTRAL"
     
     def check_iv_expansion(self, indicators: Dict[str, float], prev_indicators: Optional[Dict[str, float]]) -> Tuple[bool, str]:
@@ -266,7 +268,8 @@ class OptionsScanner:
                 return atr_change > 20, atr_percent
             
             return False, 0.0
-        except:
+        except Exception as e:
+            logger.warning(f"Error checking ATR expansion: {e}")
             return False, 0.0
     
     def calculate_option_strike(
