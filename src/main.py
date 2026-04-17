@@ -48,6 +48,10 @@ from swing_trade_scanner import SwingTradeScanner, format_swing_signal_alert, cr
 # New Options Scanner
 from options_scanner import OptionsScanner, format_options_signal_alert, create_options_scanner
 
+# NEW: Market Sentiment Analysis & AI-Driven Scanning
+from market_sentiment_analyzer import create_market_sentiment_analyzer
+from sentiment_driven_scanner import create_sentiment_driven_scanner
+
 # Enhanced Signal Validation
 from signal_validator_enhanced import create_enhanced_validator
 
@@ -210,6 +214,20 @@ class NSETrendScanner:
         
         # ==================== NEW: Market Context Engine ====================
         self.market_context_engine = create_market_context_engine(self.data_fetcher)
+        
+        # ==================== NEW: Market Sentiment Analysis & AI-Driven Scanning ====================
+        self.sentiment_analyzer = create_market_sentiment_analyzer(
+            data_fetcher=self.data_fetcher,
+            ai_analyzer=self.ai_analyzer
+        )
+        
+        self.sentiment_driven_scanner = create_sentiment_driven_scanner(
+            data_fetcher=self.data_fetcher,
+            sentiment_analyzer=self.sentiment_analyzer,
+            ai_analyzer=self.ai_analyzer
+        )
+        
+        logger.info("Market Sentiment Analyzer and Sentiment-Driven Scanner initialized")
         
         # ==================== Trade Validator ====================
         self.trade_validator = create_trade_validator(self.settings)
@@ -401,6 +419,10 @@ class NSETrendScanner:
             
             # Step 3: Run NEW MTF Strategy
             self._run_mtf_strategy()
+            
+            # Step 3.5: NEW - Run Sentiment-Driven Scanner
+            # Identifies stocks running up in bullish markets with AI validation
+            self._run_sentiment_driven_scan()
             
             # Step 4: Check active signals periodically
             if self.scan_count % self.signal_check_interval == 0:
@@ -986,6 +1008,134 @@ Loss: -{loss_pct:.1f}%
             
         except Exception as e:
             logger.error(f"Error in MTF strategy: {e}")
+    
+    def _run_sentiment_driven_scan(self):
+        """
+        NEW: Run sentiment-driven stock scanner.
+        - Analyzes market sentiment (bullish/bearish/neutral)
+        - Identifies stocks running up with momentum
+        - Validates breakouts using AI
+        - Sends alerts for high-confidence breakouts aligned with market sentiment
+        
+        This helps catch stocks that are running even without traditional breakout patterns,
+        as long as they align with positive market sentiment.
+        """
+        try:
+            # Check if sentiment analysis is enabled
+            use_sentiment = self.settings.get('scanner', {}).get('enable_sentiment_analysis', True)
+            if not use_sentiment:
+                return
+            
+            logger.info("Running Sentiment-Driven Scan...")
+            
+            # Analyze market sentiment
+            sentiment_data = self.sentiment_analyzer.analyze_market_sentiment()
+            
+            sentiment = sentiment_data.get('sentiment', 'NEUTRAL')
+            logger.info(f"Market Sentiment: {sentiment} (Strength: {sentiment_data.get('sentiment_strength', 0):.2f})")
+            
+            # Send sentiment alert if significant
+            sentiment_alert = self.sentiment_analyzer.generate_sentiment_alert()
+            if sentiment_alert:
+                target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
+                target_method(sentiment_alert)
+            
+            # Only run detailed scan in bullish/neutral markets (skip in bearish)
+            if sentiment in ['STRONGLY_BEARISH']:
+                logger.info("Market is strongly bearish - skipping detailed sentiment scan")
+                return
+            
+            # Scan for breakouts aligned with sentiment
+            breakout_signals = self.sentiment_driven_scanner.scan_with_sentiment(self.stocks, lookback=5)
+            
+            if not breakout_signals:
+                logger.info("No sentiment-aligned breakouts found")
+                return
+            
+            logger.info(f"Found {len(breakout_signals)} potential breakout signals")
+            
+            # Filter and send top signals
+            target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
+            
+            max_sentiment_signals = self.settings.get('scanner', {}).get('max_sentiment_signals_per_scan', 3)
+            signals_sent = 0
+            current_signals = set()
+            
+            for signal in breakout_signals:
+                if signals_sent >= max_sentiment_signals:
+                    break
+                
+                symbol = signal.get('symbol')
+                signal_key = f"SENTIMENT:{symbol}"
+                current_signals.add(signal_key)
+                
+                # Skip if already alerted in this session
+                if signal_key in self.previous_signals:
+                    logger.debug(f"Skipping {symbol}: already alerted in this session")
+                    continue
+                
+                # Skip if in signal memory
+                if self.signal_memory.is_duplicate(symbol, 'SENTIMENT_BREAKOUT'):
+                    logger.info(f"Skipping {symbol}: in signal memory")
+                    continue
+                
+                # Skip if in trade journal
+                if self.trade_journal.check_signal_exists(symbol, 'SENTIMENT_BREAKOUT'):
+                    logger.info(f"Skipping {symbol}: exists in trade journal")
+                    continue
+                
+                # Only alert if confidence is high enough
+                confidence = signal.get('confidence', 0)
+                min_confidence = self.settings.get('scanner', {}).get('sentiment_min_confidence', 0.6)
+                
+                if confidence < min_confidence:
+                    logger.debug(f"Skipping {symbol}: confidence {confidence} < {min_confidence}")
+                    continue
+                
+                # Format and send alert
+                try:
+                    alert = self.sentiment_driven_scanner.format_breakout_alert(signal)
+                    target_method(alert)
+                    
+                    # Log to trade journal for tracking
+                    entry_price = signal.get('price', 0)
+                    support = signal.get('support', 0)
+                    resistance = signal.get('resistance', 0)
+                    
+                    self.trade_journal.log_signal(
+                        symbol=symbol,
+                        strategy='SENTIMENT_BREAKOUT',
+                        direction='BUY',
+                        entry=entry_price,
+                        stop_loss=support,
+                        targets=[resistance, resistance * 1.05],
+                        indicators={
+                            'price_change': signal.get('price_change', 0),
+                            'volume_ratio': signal.get('volume_ratio', 0),
+                            'rsi': signal.get('rsi', 0),
+                            'quality_score': signal.get('quality_score', 0),
+                            'confidence': confidence
+                        },
+                        quality='B' if confidence > 0.7 else 'C',
+                        entry_type='MOMENTUM_BREAKOUT',
+                        breakout_strength=signal.get('quality_score', 5) / 10.0
+                    )
+                    
+                    signals_sent += 1
+                    self.total_signals += 1
+                    logger.info(f"Sent sentiment-driven alert for {symbol} (confidence: {confidence:.0%})")
+                    
+                except Exception as e:
+                    logger.error(f"Error sending sentiment alert for {symbol}: {e}")
+            
+            # Update previous signals
+            self.previous_signals = self.previous_signals.union(current_signals)
+            
+            if signals_sent > 0:
+                logger.info(f"Sentiment-driven scan complete - Sent {signals_sent} alerts")
+            
+        except Exception as e:
+            logger.error(f"Error in sentiment-driven scan: {e}", exc_info=True)
     
     def _run_all_strategies(self, stocks_data):
         """
