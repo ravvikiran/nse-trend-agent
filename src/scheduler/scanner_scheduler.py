@@ -61,11 +61,16 @@ class ScannerScheduler:
         
     def add_continuous_job(self, func: Callable, job_id: str = 'continuous_monitor') -> None:
         """
-        Add continuous monitoring job - runs every 15 minutes.
+        Add continuous monitoring job - runs every 15 minutes during market hours only.
+        
+        Market hours: 9:15 AM to 3:30 PM IST on weekdays (Mon-Fri)
+        
         Used for tracking active signals, checking SL/Target hits.
         """
-        trigger = IntervalTrigger(
-            minutes=self.scan_interval_minutes,
+        trigger = CronTrigger(
+            hour='9-15',  # 9 AM to 3 PM
+            minute='0,15,30,45',  # Every 15 minutes
+            day_of_week=self.run_days,  # Weekdays only
             timezone=self.timezone
         )
         
@@ -73,11 +78,11 @@ class ScannerScheduler:
             func,
             trigger=trigger,
             id=job_id,
-            name=f'Continuous Monitor (every {self.scan_interval_minutes} min)',
+            name=f'Continuous Monitor (every {self.scan_interval_minutes} min during market hours 9:15-15:30 IST)',
             replace_existing=True
         )
         
-        logger.info(f"Continuous monitoring job scheduled: every {self.scan_interval_minutes} minutes")
+        logger.info(f"Continuous monitoring job scheduled: every {self.scan_interval_minutes} minutes during market hours (9:15-15:30 IST) on weekdays")
     
     def add_signal_generation_job(self, func: Callable, job_id: str = 'signal_generator') -> None:
         """

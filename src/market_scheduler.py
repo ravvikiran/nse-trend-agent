@@ -553,11 +553,18 @@ class MarketScheduler:
             logger.debug("Cannot force scan - market is closed")
     
     def add_continuous_job(self, func: Callable, job_id: str = 'continuous_monitor') -> None:
-        """Add continuous monitoring job."""
-        from apscheduler.triggers.interval import IntervalTrigger
+        """
+        Add continuous monitoring job.
         
-        trigger = IntervalTrigger(
-            minutes=self.SCAN_INTERVAL,
+        Runs every 15 minutes ONLY during market hours (9:15 AM to 3:30 PM IST) on weekdays.
+        Uses CronTrigger instead of IntervalTrigger to enforce time-based restrictions.
+        """
+        # Use CronTrigger to restrict to market hours only
+        # Market hours: 9:15 AM to 3:30 PM IST on weekdays (Mon-Fri)
+        trigger = CronTrigger(
+            hour='9-15',  # 9 AM to 3 PM
+            minute='0,15,30,45',  # Every 15 minutes
+            day_of_week='0,1,2,3,4',  # Monday to Friday only
             timezone=self.ist
         )
         
@@ -565,11 +572,11 @@ class MarketScheduler:
             func,
             trigger=trigger,
             id=job_id,
-            name=f'Continuous Monitor (every {self.SCAN_INTERVAL} min)',
+            name=f'Continuous Monitor (every {self.SCAN_INTERVAL} min during market hours 9:15-15:30 IST)',
             replace_existing=True
         )
         
-        logger.info(f"Continuous monitoring job scheduled: every {self.SCAN_INTERVAL} minutes")
+        logger.info(f"Continuous monitoring job scheduled: every {self.SCAN_INTERVAL} minutes during market hours (9:15-15:30 IST) on weekdays")
     
     def add_signal_generation_job(self, func: Callable, job_id: str = 'signal_generator') -> None:
         """Add signal generation job - runs once daily at 3:00 PM IST on weekdays."""
