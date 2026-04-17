@@ -1,5 +1,19 @@
 # ✨ MARKET SENTIMENT ANALYSIS - IMPLEMENTATION COMPLETE
 
+## 🗓️ NEW: Market Scheduling & Working Days
+
+The application now **automatically respects NSE market hours and holidays**:
+
+✅ **Runs only on weekdays** (Monday-Friday)  
+✅ **Respects NSE market holidays** (19+ holidays auto-excluded)  
+✅ **Strict market hours** (9:15 AM - 3:30 PM IST only)  
+✅ **Skips weekends & pre/post-market** times  
+✅ **IST timezone** properly configured  
+
+📖 **Full Guide**: Read [MARKET_SCHEDULING_GUIDE.md](MARKET_SCHEDULING_GUIDE.md)
+
+---
+
 ## 🎉 WHAT YOU NOW HAVE
 
 Your NSE trend scanner has been enhanced with **AI-driven market sentiment analysis** that:

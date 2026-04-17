@@ -7,8 +7,8 @@ Manages the scanner execution schedule during NSE market hours using APScheduler
 import logging
 import threading
 import time
-from datetime import datetime, time as dt_time, timedelta
-from typing import Callable, Optional, Dict, Tuple
+from datetime import datetime, time as dt_time, timedelta, date
+from typing import Callable, Optional, Dict, Tuple, List
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.executors.pool import ThreadPoolExecutor
@@ -21,9 +21,10 @@ class MarketScheduler:
     """
     Manages scanner execution every 15 minutes during NSE market hours.
     
-    Market Hours: 09:15 AM to 03:30 PM IST
+    Market Hours: 09:15 AM to 03:30 PM IST (Monday to Friday)
     Scan Interval: Every 15 minutes (aligned to 00, 15, 30, 45)
     Special Jobs: 3:00 PM IST update
+    Holidays: Respects NSE market holidays
     
     Session Awareness:
     - Pre-market (09:00-09:15): NSE pre-open session
@@ -35,6 +36,31 @@ class MarketScheduler:
     MARKET_OPEN_MINUTE = 15
     MARKET_CLOSE_HOUR = 15
     MARKET_CLOSE_MINUTE = 30
+    
+    # NSE Market Holidays 2024-2026
+    # Format: (month, day) - auto-calculated for current year
+    NSE_HOLIDAYS_DATES = [
+        # 2024
+        (1, 26),   # Republic Day
+        (3, 8),    # Maha Shivaratri
+        (3, 25),   # Holi
+        (3, 29),   # Good Friday
+        (4, 11),   # Eid ul-Fitr
+        (4, 17),   # Ram Navami
+        (4, 21),   # Mahavir Jayanti
+        (5, 23),   # Buddha Purnima
+        (6, 17),   # Eid ul-Adha
+        (7, 17),   # Muharram
+        (8, 15),   # Independence Day
+        (8, 26),   # Janmashtami
+        (9, 16),   # Milad un-Nabi
+        (10, 2),   # Gandhi Jayanti
+        (10, 12),  # Dussehra
+        (10, 31),  # Diwali
+        (11, 1),   # Diwali (Day 2)
+        (11, 15),  # Guru Nanak Jayanti
+        (12, 25),  # Christmas
+    ]
     
     SCAN_INTERVAL = 15
     
@@ -247,50 +273,134 @@ class MarketScheduler:
         
         logger.debug(f"Signal recorded for {symbol} ({strategy_type} {direction})")
     
+    def _is_nse_holiday(self, check_date: date = None) -> bool:
+        """
+        Check if given date is an NSE holiday.
+        
+        Args:
+            check_date: Date to check (defaults to today)
+            
+        Returns:
+            True if holiday, False otherwise
+        """
+        if check_date is None:
+            check_date = datetime.now(self.ist).date()
+        
+        # Check if date matches any holiday (month, day)
+        for month, day in self.NSE_HOLIDAYS_DATES:
+            if check_date.month == month and check_date.day == day:
+                logger.debug(f"{check_date} is an NSE holiday")
+                return True
+        
+        return False
+    
+    def _is_market_working_day(self, check_date: date = None) -> bool:
+        """
+        Check if given date is a market working day (not weekend, not holiday).
+        
+        Args:
+            check_date: Date to check (defaults to today)
+            
+        Returns:
+            True if working day, False otherwise
+        """
+        if check_date is None:
+            check_date = datetime.now(self.ist).date()
+        
+        # Check if weekday (Mon=0, Sun=6) - market open Mon-Fri (0-4)
+        if check_date.weekday() >= 5:
+            logger.debug(f"{check_date} is weekend (weekday={check_date.weekday()})")
+            return False
+        
+        # Check if holiday
+        if self._is_nse_holiday(check_date):
+            logger.debug(f"{check_date} is NSE holiday")
+            return False
+        
+        return True
+    
     def is_market_open(self) -> bool:
         """
         Check if NSE market is currently open.
+        Checks:
+        1. Today is a working day (not weekend, not holiday)
+        2. Current time is within market hours (9:15 AM - 3:30 PM IST)
         
         Returns:
             True if market is open, False otherwise
         """
         now = datetime.now(self.ist)
+        current_date = now.date()
+        current_time = now.time()
         
-        if now.weekday() >= 5:
+        # Check if working day
+        if not self._is_market_working_day(current_date):
+            logger.debug(f"Market not open: {current_date} is not a working day")
             return False
         
-        current_time = now.time()
+        # Check if within market hours
         market_open = dt_time(self.MARKET_OPEN_HOUR, self.MARKET_OPEN_MINUTE)
         market_close = dt_time(self.MARKET_CLOSE_HOUR, self.MARKET_CLOSE_MINUTE)
         
-        return market_open <= current_time <= market_close
+        if not (market_open <= current_time <= market_close):
+            logger.debug(f"Market not open: {current_time} outside market hours ({market_open}-{market_close})")
+            return False
+        
+        return True
     
     def get_time_until_market_open(self) -> Optional[float]:
         """
-        Get seconds until market opens.
+        Get seconds until market opens next.
+        Skips weekends and holidays.
         
         Returns:
-            Seconds until market open, or None if already open
+            Seconds until market open
         """
         now = datetime.now(self.ist)
-        
-        if now.weekday() >= 5:
-            days_ahead = 7 - now.weekday()
-            next_monday = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            next_monday += timedelta(days=days_ahead)
-            return (next_monday - now).total_seconds()
-        
+        current_date = now.date()
         current_time = now.time()
+        
         market_open = dt_time(self.MARKET_OPEN_HOUR, self.MARKET_OPEN_MINUTE)
         
-        if current_time < market_open:
+        # If today is a working day and market not yet open
+        if self._is_market_working_day(current_date) and current_time < market_open:
             market_open_dt = now.replace(
                 hour=self.MARKET_OPEN_HOUR,
                 minute=self.MARKET_OPEN_MINUTE,
                 second=0,
                 microsecond=0
             )
-            return (market_open_dt - now).total_seconds()
+            seconds = (market_open_dt - now).total_seconds()
+            logger.debug(f"Market opens in {seconds/3600:.1f} hours")
+            return seconds
+        
+        # Find next working day
+        next_date = current_date + timedelta(days=1)
+        for i in range(7):  # Check up to 7 days ahead
+            if self._is_market_working_day(next_date):
+                next_open = datetime.combine(next_date, market_open)
+                next_open = self.ist.localize(next_open)
+                seconds = (next_open - now).total_seconds()
+                logger.debug(f"Market opens at {next_date} {market_open} - {seconds/3600:.1f} hours away")
+                return seconds
+            next_date += timedelta(days=1)
+        
+        # Fallback (should not happen)
+        return None
+    
+    def get_next_market_open_day(self) -> Optional[date]:
+        """
+        Get the next market working day.
+        
+        Returns:
+            Next working day date
+        """
+        check_date = datetime.now(self.ist).date() + timedelta(days=1)
+        
+        for i in range(7):  # Check up to 7 days
+            if self._is_market_working_day(check_date):
+                return check_date
+            check_date += timedelta(days=1)
         
         return None
     
