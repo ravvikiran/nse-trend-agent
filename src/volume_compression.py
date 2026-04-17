@@ -43,6 +43,16 @@ class VERCSignal:
     range_tightening: bool = False
     volume_spike: bool = False
     multi_timeframe_aligned: bool = False
+    # Dynamic attributes assigned during processing
+    base_rank_score: float = 0.0
+    rank_score: float = 0.0
+    final_score: float = 0.0
+    market_context: str = ""
+    quality: str = "C"
+    strategy_type: str = "VERC"
+    strategy_score: float = 0.0
+    alert: str = ""
+    rejection_reason: str = ""
 
 
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:

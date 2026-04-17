@@ -38,6 +38,13 @@ class TrendSignal:
         self.volume_ratio = 0.0
         self.breakout_strength = 0.0
         self.rank_score = 0.0
+        # Dynamic attributes assigned during processing
+        self.base_rank_score = 0.0
+        self.final_score = 0.0
+        self.market_context = ""
+        self.quality = "C"
+        self.alert = ""
+        self.rejection_reason = ""
         self.alert = ""
     
     def to_dict(self) -> Dict[str, Any]:

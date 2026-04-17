@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from data_fetcher import DataFetcher
 from indicator_engine import IndicatorEngine
 from trend_detector import TrendDetector
-from alert_service import AlertService, TelegramBotHandler
+from alert_service import AlertService, TelegramBotHandler, MockAlertService
 from market_scheduler import MarketScheduler
 from volume_compression import scan_stocks as verc_scan_stocks
 from ai_stock_analyzer import create_analyzer
@@ -112,7 +112,6 @@ class NSETrendScanner:
         
         # Initialize alert service
         if use_mock_alerts:
-            from alert_service import MockAlertService
             self.alert_service = MockAlertService()
         else:
             # Prefer channel chat ID over personal chat ID
@@ -561,8 +560,6 @@ Loss: -{loss_pct:.1f}%
         Monitors active signals, checks for SL/Target hits.
         Does NOT generate new signals - only tracks existing ones.
         """
-        import pytz
-        
         ist = pytz.timezone('Asia/Kolkata')
         now = datetime.now(ist)
         
@@ -1495,8 +1492,12 @@ Loss: -{loss_pct:.1f}%
                         stop_loss = chart_levels[0]
                         target_1 = chart_levels[1]
                         target_2 = chart_levels[2]
-                        target_3 = target_2 * 1.015 if target_2 > target_1 else target_2 * 0.985
-                        targets = [target_1, target_2, target_3]
+                        # Safely handle None values in targets
+                        if target_2 and target_1 and isinstance(target_2, (int, float)) and isinstance(target_1, (int, float)):
+                            target_3 = target_2 * 1.015 if target_2 > target_1 else target_2 * 0.985
+                            targets = [float(target_1), float(target_2), float(target_3)]
+                        else:
+                            targets = [float(target_1) if target_1 else 0.0, float(target_2) if target_2 else 0.0]
                     else:
                         ema50 = indicators.get('ema50', 0)
                         atr = indicators.get('atr', 0)
@@ -1509,7 +1510,7 @@ Loss: -{loss_pct:.1f}%
                         target_1 = entry + (risk * 2)
                         target_2 = entry + (risk * 3)
                         target_3 = entry + (risk * 4)
-                        targets = [target_1, target_2, target_3]
+                        targets = [float(target_1), float(target_2), float(target_3)]
                     
                     rsi = indicators.get('rsi_value', 0) or indicators.get('rsi', 0)
                     volume_ratio = signal.volume_ratio if hasattr(signal, 'volume_ratio') else indicators.get('volume_ratio', 0)
@@ -1522,19 +1523,23 @@ Loss: -{loss_pct:.1f}%
                         stop_loss = chart_levels[0]
                         t1 = chart_levels[1]
                         t2 = chart_levels[2]
-                        targets = [t1, t2] if t1 > 0 and t2 > 0 else []
-                        if t1 > 0 and t2 > 0 and stop_loss > 0:
-                            t3 = t2 * 1.015 if t2 > t1 else t2 * 0.985
-                            targets.append(t3)
+                        # Safely handle None values in targets
+                        if t1 and t2 and isinstance(t1, (int, float)) and isinstance(t2, (int, float)):
+                            targets = [float(t1), float(t2)] if t1 > 0 and t2 > 0 else []
+                            if targets and t2 and t1 and stop_loss and stop_loss > 0:
+                                t3 = t2 * 1.015 if t2 > t1 else t2 * 0.985
+                                targets.append(float(t3))
+                        else:
+                            targets = []
                     else:
                         stop_loss = signal.stop_loss
                         t1 = signal.target_1 if hasattr(signal, 'target_1') else 0
                         t2 = signal.target_2 if hasattr(signal, 'target_2') else 0
-                        targets = [t1, t2] if t1 > 0 and t2 > 0 else []
+                        targets = [float(t1), float(t2)] if t1 > 0 and t2 > 0 else []
                         if t1 > 0 and t2 > 0 and stop_loss > 0:
                             risk = entry - stop_loss
                             t3 = entry + (risk * 4)
-                            targets.append(t3)
+                            targets.append(float(t3))
                     rsi = signal.rsi if hasattr(signal, 'rsi') else 0
                     volume_ratio = signal.relative_volume if hasattr(signal, 'relative_volume') else 0
                     current_price = signal.current_price if hasattr(signal, 'current_price') else entry
@@ -2094,7 +2099,7 @@ Loss: -{loss_pct:.1f}%"""
             
             risk = entry - stop_loss
             target_1 = entry + (risk * 2)
-            targets = [target_1, entry + (risk * 3)]
+            targets = [float(target_1), float(entry + (risk * 3))]
             
             quality = getattr(signal, 'quality', 'B')
             market_context = getattr(signal, 'market_context', 'BULLISH')
@@ -2139,7 +2144,7 @@ Loss: -{loss_pct:.1f}%"""
             entry = signal.entry_min if hasattr(signal, 'entry_min') else signal.current_price
             stop_loss = signal.stop_loss if hasattr(signal, 'stop_loss') else 0
             target_1 = signal.target_1 if hasattr(signal, 'target_1') else 0
-            targets = [target_1, signal.target_2] if hasattr(signal, 'target_2') else [target_1]
+            targets = [float(target_1), float(signal.target_2)] if hasattr(signal, 'target_2') else [float(target_1)]
             
             quality = getattr(signal, 'quality', 'B')
             market_context = getattr(signal, 'market_context', 'BULLISH')
@@ -2245,8 +2250,6 @@ Loss: -{loss_pct:.1f}%"""
         - If signals satisfy criteria, sends them as alerts
         - If no signals satisfy criteria, sends 'no signals yet' alert
         """
-        import pytz
-        
         ist = pytz.timezone('Asia/Kolkata')
         current_time = datetime.now(ist)
         
@@ -2397,8 +2400,6 @@ Loss: -{loss_pct:.1f}%"""
         Scans for signals that satisfy criteria and stores them in pending queue.
         Does NOT send alerts immediately - only sends at 3 PM.
         """
-        import pytz
-        
         ist = pytz.timezone('Asia/Kolkata')
         now = datetime.now(ist)
         
