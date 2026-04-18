@@ -42,8 +42,8 @@ class ScannerScheduler:
         # Scan interval for continuous monitoring (default 15 min)
         self.scan_interval_minutes = self.scheduler_config.get('scan_interval_minutes', 15)
         
-        # Run days: Monday=0, Tuesday=1, ..., Friday=4
-        self.run_days = self.scheduler_config.get('run_days', [1, 2, 3, 4, 5])
+        # Run days: Monday=0, Tuesday=1, Wednesday=2, Thursday=3, Friday=4 (NOT Saturday=5, Sunday=6)
+        self.run_days = self.scheduler_config.get('run_days', [0, 1, 2, 3, 4])
         
         # Configure executors
         executors = {

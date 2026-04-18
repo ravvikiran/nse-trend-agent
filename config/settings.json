@@ -21,7 +21,7 @@
         "am_signal_time_minute": 0,
         "pm_signal_time_hour": 15,
         "pm_signal_time_minute": 0,
-        "run_days": [1, 2, 3, 4, 5],
+        "run_days": [0, 1, 2, 3, 4],
         "market_open_hour": 9,
         "market_open_minute": 15,
         "market_close_hour": 15,
