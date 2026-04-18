@@ -639,12 +639,23 @@ Loss: -{loss_pct:.1f}%
         SIGNAL GENERATION MODE - 3:00 PM only
         Sends signals from top 5 candidates found throughout the day.
         If no candidates, runs fresh scan and sends top signals.
+        
+        NEW: Refreshes adaptive filters from learning layer before generating signals.
         """
         from datetime import datetime
         
         ist = pytz.timezone('Asia/Kolkata')
         now = datetime.now(ist)
         today = now.date()
+        
+        # ==================== NEW: Refresh Learning Filters ====================
+        # Before generating signals, refresh adaptive filters from AI learning layer
+        if self.ai_learning_layer and self.ai_rules_engine:
+            try:
+                self.ai_rules_engine._load_adaptive_filters()
+                logger.info("🧠 Refreshed adaptive filters from AI learning layer before signal generation")
+            except Exception as e:
+                logger.warning(f"Could not refresh learning filters: {e}")
         
         # Skip on weekends
         if now.weekday() >= 5:
@@ -1066,6 +1077,16 @@ Loss: -{loss_pct:.1f}%
                     break
                 
                 symbol = signal.get('symbol')
+                
+                # ==================== NEW: Type Safety Check ====================
+                # Ensure symbol is not None before processing
+                if not symbol:
+                    logger.debug("Skipping signal: symbol is None")
+                    continue
+                
+                # Ensure symbol is string type
+                symbol = str(symbol) if not isinstance(symbol, str) else symbol
+                
                 signal_key = f"SENTIMENT:{symbol}"
                 current_signals.add(signal_key)
                 
@@ -1151,12 +1172,25 @@ Loss: -{loss_pct:.1f}%
         - IF TREND and NIFTY SIDEWAYS: reject weak signals
         - IF TREND and NIFTY BEARISH: reduce score by -1 (not -2)
         - VERC allowed in all market conditions
+        
+        NEW: Applies learning-based filtering to reject signals based on historical failures.
         """
         from trade_journal import TradeJournal
         
         excluded_stocks = self.signal_memory.get_excluded_stocks()
         
         market_context = self.market_context_engine.get_context()
+        
+        # ==================== NEW: Get Learning Insights ====================
+        learning_insights = None
+        learning_blacklist = set()
+        if self.ai_learning_layer and self.ai_learning_layer.is_available():
+            try:
+                learning_insights = self.ai_learning_layer.analyze_recent_trades(limit=50)
+                if learning_insights.get('issues'):
+                    logger.debug(f"Learning insights - Issues: {learning_insights['issues'][:2]}")
+            except Exception as e:
+                logger.debug(f"Could not get learning insights: {e}")
         
         all_signals = []
         current_signals = set()
@@ -1193,6 +1227,13 @@ Loss: -{loss_pct:.1f}%
                     if breakout_type is None or breakout_type != 'BUY':
                         logger.info(f"❌ Rejected {signal.ticker}: No valid breakout")
                         continue
+                    
+                    # ==================== NEW: Learning-Based Filtering ====================
+                    # Check if this signal matches blacklisted patterns from learning
+                    if learning_insights and learning_insights.get('blacklisted_stocks'):
+                        if signal.ticker in learning_insights.get('blacklisted_stocks', []):
+                            logger.info(f"❌ Rejected {signal.ticker}: Blacklisted by learning system")
+                            continue
                     
                     signal.base_rank_score = self._calculate_base_rank_score(signal)
                     
@@ -1236,6 +1277,13 @@ Loss: -{loss_pct:.1f}%
                     if not is_valid:
                         logger.info(f"Signal {signal.stock_symbol} rejected by trade validator: {reason}")
                         continue
+                    
+                    # ==================== NEW: Learning-Based Filtering ====================
+                    # Check if this signal matches blacklisted patterns from learning
+                    if learning_insights and learning_insights.get('blacklisted_stocks'):
+                        if signal.stock_symbol in learning_insights.get('blacklisted_stocks', []):
+                            logger.info(f"❌ Rejected {signal.stock_symbol}: Blacklisted by learning system")
+                            continue
                     
                     signal.base_rank_score = self._calculate_base_rank_score(signal)
                     
@@ -2193,6 +2241,31 @@ Loss: -{loss_pct:.1f}%"""
                 total_closed = len(closed_trades)
                 
                 if total_closed >= 20:
+                    # ==================== NEW: AI Learning Analysis ====================
+                    # Analyze recent trades using AI learning layer
+                    logger.info("🤖 Starting AI Learning Analysis...")
+                    learning_result = self.ai_learning_layer.analyze_recent_trades(limit=50)
+                    
+                    if learning_result.get('recommendations'):
+                        logger.info(f"🧠 Learning insights found: {learning_result['recommendations'][:3]}")
+                        
+                        # Generate AI insights for deeper analysis
+                        if self.ai_learning_layer.is_available():
+                            ai_insights = self.ai_learning_layer.generate_ai_insights()
+                            if ai_insights.get('insights'):
+                                logger.info(f"🔍 AI Insights: {ai_insights['insights'][:2]}")
+                        
+                        # Apply recommended filters from learning
+                        filter_result = self.ai_learning_layer.apply_recommended_filters()
+                        if filter_result and filter_result.get('new_filters'):
+                            logger.info(f"✅ Applied adaptive filters from learning: {filter_result['applied_count']} filters updated")
+                            
+                            # Refresh AI rules engine with new filters
+                            if self.ai_rules_engine:
+                                self.ai_rules_engine._load_adaptive_filters()
+                                logger.info("✅ AI Rules Engine filters refreshed with learning data")
+                    
+                    # ==================== Factor Analysis ====================
                     self.factor_analyzer.batch_analyze(closed_trades)
                     
                     recommendations = self.factor_analyzer.get_optimization_recommendations()
@@ -2201,8 +2274,13 @@ Loss: -{loss_pct:.1f}%"""
                     
                     self.strategy_optimizer.auto_optimize()
                     
+                    # Log learning report
+                    learning_report = self.ai_learning_layer.get_learning_report()
+                    if learning_report:
+                        logger.info(f"📊 Learning Report: {learning_report.get('summary', '')}")
+                    
                     self._last_learning_time = datetime.now()
-                    logger.info(f"Learning run: {total_closed} closed trades analyzed")
+                    logger.info(f"✅ Learning run complete: {total_closed} closed trades analyzed")
                 else:
                     logger.debug(f"Skipping learning: only {total_closed} closed trades (need 20+)")
                 
@@ -2624,9 +2702,36 @@ Loss: -{loss_pct:.1f}%"""
         Run periodic scan every 15 minutes.
         Scans for signals that satisfy criteria and stores them in pending queue.
         Does NOT send alerts immediately - only sends at 3 PM.
+        
+        NEW: Periodically checks for learning updates and refreshes adaptive filters.
         """
         ist = pytz.timezone('Asia/Kolkata')
         now = datetime.now(ist)
+        
+        # ==================== NEW: Periodic Learning Check ====================
+        # Every 2 hours (8 scans = 8 * 15 min), analyze trades and refresh filters
+        if not hasattr(self, '_periodic_learning_count'):
+            self._periodic_learning_count = 0
+        
+        self._periodic_learning_count += 1
+        if self._periodic_learning_count >= 8:  # Every 2 hours
+            if self.ai_learning_layer and self.ai_rules_engine:
+                try:
+                    closed_trades = self.trade_journal.get_closed_trades(limit=50)
+                    if len(closed_trades) >= 5:
+                        logger.info(f"🧠 Periodic learning check: Analyzing {len(closed_trades)} closed trades...")
+                        learning_result = self.ai_learning_layer.analyze_recent_trades(limit=50)
+                        
+                        if learning_result.get('recommendations'):
+                            logger.info(f"💡 Learning update: {len(learning_result['recommendations'])} recommendations found")
+                            filter_result = self.ai_learning_layer.apply_recommended_filters()
+                            if filter_result:
+                                self.ai_rules_engine._load_adaptive_filters()
+                                logger.info("✅ Adaptive filters refreshed during periodic scan")
+                except Exception as e:
+                    logger.debug(f"Periodic learning check failed: {e}")
+            
+            self._periodic_learning_count = 0
         
         # Skip on weekends
         if now.weekday() >= 5:
@@ -2905,7 +3010,7 @@ def run_scheduled(config: dict, logger):
     # Check if telegram_bot exists, otherwise use alert_service
     TelegramBot = None
     try:
-        from notifications.telegram_bot import TelegramBot
+        from notifications.telegram_bot import TelegramBot  # type: ignore
     except (ImportError, ModuleNotFoundError):
         pass
     
