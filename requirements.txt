@@ -23,6 +23,10 @@ python-dotenv>=1.0.0
 # Date/Time utilities
 pytz>=2023.3
 
+# Web Framework & UI
+flask>=2.3.0
+flask-cors>=4.0.0
+
 # AI/LLM Integration (Multi-Provider)
 openai>=1.0.0
 anthropic>=0.25.0
