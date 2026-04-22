@@ -895,7 +895,8 @@ class SignalMemory:
                     added_at = datetime.fromisoformat(sig.get('added_at', ''))
                     if added_at > cutoff:
                         excluded.add(stock)
-                except:
+                except Exception as e:
+                    print(f"Error parsing added_at for {stock}: {e}")
                     pass
         
         for sig in self.all_signals:
@@ -907,7 +908,8 @@ class SignalMemory:
                     generated_at = datetime.fromisoformat(sig.get('generated_at', ''))
                     if generated_at > cutoff:
                         excluded.add(stock)
-                except:
+                except Exception as e:
+                    print(f"Error parsing generated_at for {stock}: {e}")
                     pass
         
         return excluded

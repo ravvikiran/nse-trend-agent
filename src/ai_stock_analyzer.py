@@ -295,10 +295,13 @@ class OllamaProvider(BaseLLMProvider):
     def _init_client(self):
         try:
             import httpx
-            self.client = httpx.Client(base_url=self.base_url, timeout=30.0)
-            resp = self.client.get("/api/tags")
-            self._available = resp.status_code == 200
-        except Exception:
+            # Test connection without keeping client open
+            with httpx.Client(base_url=self.base_url, timeout=30.0) as client:
+                resp = client.get("/api/tags")
+                self._available = resp.status_code == 200
+        except (httpx.ConnectError, httpx.TimeoutException, Exception) as e:
+            import logging
+            logging.debug(f"Ollama connection failed: {e}")
             self._available = False
     
     def is_available(self) -> bool:
@@ -309,7 +312,9 @@ class OllamaProvider(BaseLLMProvider):
             raise Exception("Ollama not available")
         
         import httpx
-        client = httpx.Client(base_url=self.base_url, timeout=60.0)
+        import json
+        import logging
+        logger = logging.getLogger(__name__)
         
         prompt = ""
         for msg in messages:
@@ -318,19 +323,30 @@ class OllamaProvider(BaseLLMProvider):
             else:
                 prompt += f"User: {msg['content']}\n"
         
-        response = client.post(
-            "/api/generate",
-            json={
-                "model": self.model,
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "temperature": kwargs.get("temperature", 0.7),
-                    "num_predict": kwargs.get("max_tokens", 1000)
-                }
-            }
-        )
-        return response.json().get("response", "")
+        try:
+            with httpx.Client(base_url=self.base_url, timeout=60.0) as client:
+                response = client.post(
+                    "/api/generate",
+                    json={
+                        "model": self.model,
+                        "prompt": prompt,
+                        "stream": False,
+                        "options": {
+                            "temperature": kwargs.get("temperature", 0.7),
+                            "num_predict": kwargs.get("max_tokens", 1000)
+                        }
+                    }
+                )
+                response.raise_for_status()
+                try:
+                    data = response.json()
+                    return data.get("response", "")
+                except json.JSONDecodeError as e:
+                    logger.error(f"Invalid JSON response from Ollama: {e}")
+                    return ""
+        except Exception as e:
+            logger.error(f"Ollama API error: {e}")
+            return ""
 
 
 class MiniMaxProvider(BaseLLMProvider):
@@ -347,17 +363,21 @@ class MiniMaxProvider(BaseLLMProvider):
         if self.api_key:
             try:
                 import httpx
-                self.client = httpx.Client(
+                # Just test connection, don't keep client open
+                with httpx.Client(
                     base_url="https://api.minimax.chat",
                     headers={
                         "Authorization": f"Bearer {self.api_key}",
                         "Content-Type": "application/json"
                     },
                     timeout=60.0
-                )
-                self._available = True
-            except Exception:
+                ) as client:
+                    resp = client.get("/v1/models")
+                    self._available = resp.status_code == 200
+            except (httpx.ConnectError, httpx.TimeoutException, Exception):
                 self._available = False
+        else:
+            self._available = False
     
     def is_available(self) -> bool:
         return getattr(self, '_available', False)
@@ -367,25 +387,38 @@ class MiniMaxProvider(BaseLLMProvider):
             raise Exception("MiniMax not available")
         
         import httpx
-        client = httpx.Client(
-            base_url="https://api.minimax.chat",
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            },
-            timeout=60.0
-        )
+        import json
+        import logging
+        logger = logging.getLogger(__name__)
         
-        response = client.post(
-            "/v1/text/chatcompletion_v2",
-            json={
-                "model": self.model,
-                "messages": messages,
-                "temperature": kwargs.get("temperature", 0.7),
-                "max_tokens": kwargs.get("max_tokens", 1000)
-            }
-        )
-        return response.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+        try:
+            with httpx.Client(
+                base_url="https://api.minimax.chat",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
+                },
+                timeout=60.0
+            ) as client:
+                response = client.post(
+                    "/v1/text/chatcompletion_v2",
+                    json={
+                        "model": self.model,
+                        "messages": messages,
+                        "temperature": kwargs.get("temperature", 0.7),
+                        "max_tokens": kwargs.get("max_tokens", 1000)
+                    }
+                )
+                response.raise_for_status()
+                try:
+                    data = response.json()
+                    return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                except (json.JSONDecodeError, IndexError, KeyError) as e:
+                    logger.error(f"Failed to parse MiniMax response: {e}")
+                    return ""
+        except Exception as e:
+            logger.error(f"MiniMax API error: {e}")
+            return ""
 
 
 class MultiProviderAIAnalyzer:

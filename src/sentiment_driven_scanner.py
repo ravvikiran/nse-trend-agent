@@ -252,7 +252,8 @@ class SentimentDrivenScanner:
             momentum = (price_score * 0.4 + volume_score * 0.3 + rsi_score * 0.2 + ema_score * 0.1)
             
             return float(min(10, max(0, momentum)))
-        except:
+        except Exception as e:
+            print(f"Error calculating momentum: {e}")
             return 0.0
     
     def _calculate_quality_score(self, close: float, ema20: float, ema50: float, 
@@ -298,7 +299,8 @@ class SentimentDrivenScanner:
                 score += 1
             
             return float(min(10, max(0, score)))
-        except:
+        except Exception as e:
+            print(f"Error calculating quality score: {e}")
             return 0.0
     
     def _calculate_base_confidence(self, sentiment_data: Dict[str, Any], quality_score: float) -> float:
@@ -338,7 +340,8 @@ class SentimentDrivenScanner:
             rs = gain / loss if loss.iloc[-1] > 0 else 0
             rsi = 100 - (100 / (1 + rs)) if rs > 0 else 50
             return float(rsi.iloc[-1])
-        except:
+        except Exception as e:
+            print(f"Error calculating RSI: {e}")
             return 50.0
     
     def _calculate_atr(self, df, period=14):
@@ -355,7 +358,8 @@ class SentimentDrivenScanner:
             tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
             atr = tr.rolling(window=period).mean().iloc[-1]
             return float(atr)
-        except:
+        except Exception as e:
+            print(f"Error calculating ATR: {e}")
             return 0.0
     
     def format_breakout_alert(self, signal: Dict[str, Any]) -> str:

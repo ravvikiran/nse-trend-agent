@@ -284,7 +284,8 @@ class MarketSentimentAnalyzer:
                         if df is not None and len(df) > 0:
                             change = ((df['close'].iloc[-1] - df['close'].iloc[0]) / df['close'].iloc[0] * 100)
                             sector_performances.append(change)
-                    except:
+                    except Exception as e:
+                        logger.debug(f"Error analyzing sector stock {stock}: {e}")
                         continue
                 
                 if sector_performances:
@@ -408,8 +409,10 @@ Respond with: YES/NO | Confidence (1-10) | Reason (one line)
                     try:
                         conf_str = parts[1].strip() if len(parts) > 1 else "5"
                         confidence = float(conf_str.split('/')[0].strip())
-                    except:
-                        pass
+                    except (ValueError, IndexError, AttributeError) as e:
+                        import logging
+                        logging.debug(f"Failed to parse confidence: {e}")
+                        confidence = 5.0
                     
                     reason = parts[2].strip() if len(parts) > 2 else "AI validation"
                     
@@ -456,7 +459,8 @@ Respond with: YES/NO | Confidence (1-10) | Reason (one line)
             rs = gain / loss if loss.iloc[-1] > 0 else 0
             rsi = 100 - (100 / (1 + rs)) if rs > 0 else 50
             return float(rsi.iloc[-1])
-        except:
+        except Exception as e:
+            logger.debug(f"Error calculating RSI: {e}")
             return 50.0
     
     def _calculate_atr(self, df, period=14):
@@ -473,7 +477,8 @@ Respond with: YES/NO | Confidence (1-10) | Reason (one line)
             tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
             atr = tr.rolling(window=period).mean().iloc[-1]
             return float(atr)
-        except:
+        except Exception as e:
+            logger.debug(f"Error calculating ATR: {e}")
             return 0.0
     
     def generate_sentiment_alert(self) -> Optional[str]:
