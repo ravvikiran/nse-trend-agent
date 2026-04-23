@@ -102,9 +102,13 @@ class IndicatorEngine:
             result_df['avg_volume_30'] = result_df['volume'].rolling(window=30).mean()
             
             # For scoring, we only need the latest row to be valid for key indicators
-            # Don't drop all NaN - instead, fill with method that allows partial data
-            # Keep rows that have at least the essential indicators (EMA20, EMA50, RSI, volume)
+            # Check only the last row for essential indicators
             essential_cols = ['ema_20', 'ema_50', 'rsi', 'volume_ma']
+            if result_df.tail(1)[essential_cols].isna().any(axis=1).iloc[0]:
+                logger.debug("Latest row missing essential indicators")
+                return df.iloc[0:0]  # Return empty DataFrame with same columns
+            
+            # For historical analysis, drop rows with NaN in essential cols
             result_df = result_df.dropna(subset=essential_cols)
             
             logger.debug(f"Calculated indicators for {len(result_df)} candles")

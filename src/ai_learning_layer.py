@@ -158,7 +158,7 @@ class AILearningLayer:
                 t for t in loss_trades 
                 if t.get('volume_ratio', 0) < filters.get('volume_ratio_min', 1.5)
             ]
-            if len(low_volume_losses) / len(loss_trades) > 0.6:
+            if len(loss_trades) > 0 and len(low_volume_losses) / len(loss_trades) > 0.6:
                 issues.append("Low volume trades underperforming")
                 recommendations.append(f"Increase volume threshold to {filters.get('volume_ratio_min', 1.5) + 0.3}x")
             
@@ -166,7 +166,7 @@ class AILearningLayer:
                 t for t in loss_trades 
                 if (t.get('rsi', 0) or 0) > filters.get('rsi_max', 65)
             ]
-            if len(high_rsi_losses) / len(loss_trades) > 0.6:
+            if len(loss_trades) > 0 and len(high_rsi_losses) / len(loss_trades) > 0.6:
                 issues.append("Overbought entries leading to losses")
                 recommendations.append(f"Tighten RSI filter to {filters.get('rsi_max', 65) - 5}")
             
@@ -174,16 +174,19 @@ class AILearningLayer:
                 t for t in loss_trades 
                 if t.get('volume_ratio', 0) < filters.get('volume_ratio_min', 1.5) and (t.get('rsi', 0) or 0) > filters.get('rsi_max', 65)
             ]
-            if len(low_volume_high_rsi_combo) / len(loss_trades) > 0.4:
+            if len(loss_trades) > 0 and len(low_volume_high_rsi_combo) / len(loss_trades) > 0.4:
                 issues.append("Low volume + high RSI combo failing badly")
                 recommendations.append("Avoid entries with low volume AND high RSI")
         
         timeout_trades = [t for t in recent_trades if t.get('outcome') == 'TIMEOUT']
-        if len(timeout_trades) / len(recent_trades) > 0.3:
+        if len(recent_trades) > 0 and len(timeout_trades) / len(recent_trades) > 0.3:
             issues.append("Too many trades timing out")
             recommendations.append("Review expiry settings (currently 15 days)")
         
-        overall_win_rate = sum(1 for t in recent_trades if t.get('outcome') == 'WIN') / len(recent_trades) * 100
+        if len(recent_trades) > 0:
+            overall_win_rate = sum(1 for t in recent_trades if t.get('outcome') == 'WIN') / len(recent_trades) * 100
+        else:
+            overall_win_rate = 0
         if overall_win_rate < 50:
             recommendations.append("Reduce confidence scaling - win rate below 50%")
         

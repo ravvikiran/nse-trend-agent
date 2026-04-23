@@ -805,7 +805,7 @@ The scanner runs every 15 minutes during market hours (9:15 AM - 3:30 PM IST).""
             logging.error(f"Error processing message: {e}")
             return f"Error processing request: {str(e)}"
 
-def _handle_stock_query(self, text: str, chat_id: str) -> str:
+    def _handle_stock_query(self, text: str, chat_id: str) -> str:
         """Handle plain text as stock symbol query."""
         symbol = text.strip().upper()
         

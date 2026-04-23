@@ -90,16 +90,30 @@ def get_dashboard():
         win_rate = (win_count / total_trades * 100) if total_trades > 0 else 0
 
         # Calculate P&L
-        total_pnl = sum(
-            (
-                t.get("targets", [0])[min(len(t.get("targets_hit", [])), 1) - 1]
-                - t.get("entry", 0)
-            )
-            * t.get("quantity", 1)
-            if t.get("outcome") == "WIN"
-            else -(t.get("entry", 0) - t.get("stop_loss", 0)) * t.get("quantity", 1)
-            for t in all_trades
-        )
+        total_pnl = 0
+        for t in all_trades:
+            outcome = t.get("outcome", "")
+            entry = t.get("entry", 0)
+            quantity = t.get("quantity", 1)
+            
+            if outcome == "WIN":
+                # Use actual exit price if available, otherwise use targets hit
+                targets_hit = t.get("targets_hit", [])
+                targets = t.get("targets", [0])
+                if targets_hit and len(targets_hit) > 0:
+                    # Get the highest target hit
+                    highest_target = max(targets_hit)
+                    exit_price = targets[min(highest_target - 1, len(targets) - 1)]
+                else:
+                    exit_price = t.get("exit_price", entry)
+                total_pnl += (exit_price - entry) * quantity
+            elif outcome == "LOSS":
+                exit_price = t.get("exit_price", t.get("stop_loss", entry))
+                total_pnl += (exit_price - entry) * quantity
+            # OPEN trades: calculate unrealized P&L
+            elif outcome == "OPEN":
+                current_price = t.get("current_price", entry)
+                total_pnl += (current_price - entry) * quantity
 
         # Market status
         market_status = (

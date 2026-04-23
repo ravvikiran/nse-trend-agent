@@ -13,6 +13,7 @@ import yfinance as yf
 import pandas as pd
 import logging
 import time
+import pytz
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 
@@ -164,12 +165,10 @@ class DataFetcher:
     def is_market_open(self) -> bool:
         """
         Check if NSE market is currently open.
-
+        
         Returns:
             True if market is open, False otherwise
         """
-        import pytz
-
         # Get current time in IST
         ist = pytz.timezone("Asia/Kolkata")
         now = datetime.now(ist)
