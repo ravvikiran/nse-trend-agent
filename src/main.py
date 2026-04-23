@@ -2503,16 +2503,23 @@ Loss: -{loss_pct:.1f}%"""
             logger.info("Telegram bot handler started")
         
         # Setup dual-mode scheduler
-        # Continuous mode: every 15 minutes - monitoring only + scanning for new signals
-        # Signal generation mode: 3:00 PM - send top 5 signals as alerts
+        # Continuous mode: every 15 minutes during market hours - monitoring only + scanning for new signals
+        # Signal generation mode: 3:00 PM daily - send top 5 signals
         
         scan_interval = self.settings.get('scanner', {}).get('scan_interval_minutes', 15)
         
-        # Add continuous monitoring job (every 15 min - monitors active trades)
-        self.scheduler.add_continuous_job(self.run_continuous_monitoring, 'continuous_monitor')
+        # Use market-hour-aware scheduling - jobs only run during market hours (9:15-15:30 IST, Mon-Fri)
+        self.scheduler.add_continuous_job(
+            self.run_continuous_monitoring, 
+            'continuous_monitor',
+            market_hours_only=True
+        )
         
-        # Add periodic scanning job (every 15 min - scans for new signals, stores them)
-        self.scheduler.add_continuous_job(self._run_periodic_scan, 'periodic_scan')
+        self.scheduler.add_continuous_job(
+            self._run_periodic_scan, 
+            'periodic_scan',
+            market_hours_only=True
+        )
         
         # Add signal generation job (3:00 PM daily - sends top 5 signals)
         self.scheduler.add_signal_generation_job(self.run_signal_generation, 'signal_generator')
