@@ -215,6 +215,21 @@ class DataFetcher:
             logger.error(f"Error fetching live data for {ticker}: {str(e)}")
             return None
 
+    def get_current_price(self, ticker: str) -> Optional[float]:
+        """
+        Get current price for a ticker.
+
+        Args:
+            ticker: Stock ticker symbol
+
+        Returns:
+            Current price or None if unavailable
+        """
+        live_data = self.get_live_data(ticker)
+        if live_data:
+            return live_data.get('current_price')
+        return None
+
     def fetch_multi_timeframe(
         self, ticker: str, days: int = 30
     ) -> Dict[str, pd.DataFrame]:

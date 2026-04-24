@@ -1,1 +1,1 @@
-worker: python src/main.py --schedule
+web: python src/main.py

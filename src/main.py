@@ -73,6 +73,9 @@ from consolidation_detector import is_tight_consolidation, is_valid_breakout, is
 # Agent Controller - Makes scanner Agentic AI
 from agent_controller import create_agent_controller, AgentAction
 
+# Flask API integration
+from api import init_api as init_flask_api, app as flask_app
+
 
 def setup_logging(log_level='INFO', log_file='logs/scanner.log'):
     """Setup logging configuration. In Railway, only use stdout."""
@@ -2510,15 +2513,13 @@ Loss: -{loss_pct:.1f}%"""
         
         # Use market-hour-aware scheduling - jobs only run during market hours (9:15-15:30 IST, Mon-Fri)
         self.scheduler.add_continuous_job(
-            self.run_continuous_monitoring, 
-            'continuous_monitor',
-            market_hours_only=True
+            self.run_continuous_monitoring,
+            'continuous_monitor'
         )
-        
+
         self.scheduler.add_continuous_job(
-            self._run_periodic_scan, 
-            'periodic_scan',
-            market_hours_only=True
+            self._run_periodic_scan,
+            'periodic_scan'
         )
         
         # Add signal generation job (3:00 PM daily - sends top 5 signals)
@@ -3156,12 +3157,34 @@ def main():
         strategy=args.strategy,
         enable_telegram_bot=args.enable_telegram_bot
     )
-    
+
+    # Initialize Flask API with scanner instances
+    try:
+        init_flask_api(
+            trade_journal_inst=scanner.trade_journal,
+            data_fetcher_inst=scanner.data_fetcher,
+            market_scheduler_inst=scanner.scheduler,
+            performance_tracker_inst=scanner.performance_tracker,
+            history_manager_inst=scanner.history_manager
+        )
+        logger.info("Flask API initialized with scanner components")
+    except Exception as e:
+        logger.error(f"Failed to initialize API: {e}")
+
+    # Start Flask API in background thread
+    def run_api():
+        port = int(os.environ.get('PORT', 5050))
+        flask_app.run(debug=False, host='0.0.0.0', port=port, threaded=True)
+
+    api_thread = threading.Thread(target=run_api, daemon=True)
+    api_thread.start()
+    logger.info(f"Flask API started on port {os.environ.get('PORT', 5050)}")
+
     # Handle test modes
     if args.test:
         scanner.run_once()
         return
-    
+
     if args.test_telegram:
         success = scanner.test_telegram()
         if success:
@@ -3169,7 +3192,7 @@ def main():
         else:
             print("Telegram test failed!")
         return
-    
+
     # Start scanner
     scanner.start()
 

@@ -47,44 +47,33 @@ PORT=${2:-5000}
 
 case $MODE in
     "ui")
-        echo -e "${GREEN}✓ Starting Web UI Server${NC}"
-        echo -e "${YELLOW}Dashboard will be available at: http://localhost:${PORT}${NC}"
+        echo -e "${GREEN}✓ Starting Web UI + Scanner${NC}"
+        echo -e "${YELLOW}Dashboard available at: http://localhost:${PORT}${NC}"
         echo ""
-        python src/api.py --port $PORT
+        export PORT
+        python src/main.py
         ;;
     
     "both")
-        echo -e "${GREEN}✓ Starting Both Scanner and Web UI${NC}"
+        echo -e "${GREEN}✓ Starting Web UI + Scanner (both)${NC}"
         echo -e "${YELLOW}Dashboard available at: http://localhost:${PORT}${NC}"
         echo ""
-        
-        # Note: This is a simplified example
-        # For production, use process managers like supervisord or systemd
-        echo -e "${BLUE}Starting Scanner...${NC}"
-        python src/main.py &
-        SCANNER_PID=$!
-        
-        sleep 2
-        
-        echo -e "${BLUE}Starting Web UI on port ${PORT}...${NC}"
-        python src/api.py --port $PORT
-        
-        # Cleanup on exit
-        trap "kill $SCANNER_PID" EXIT
+        export PORT
+        python src/main.py
         ;;
     
     "help")
         echo "Usage: ./run_ui.sh [MODE] [PORT]"
         echo ""
         echo "Modes:"
-        echo "  ui       - Run Web UI only (default)"
-        echo "  both     - Run Scanner + Web UI together"
+        echo "  ui       - Run Web UI + Scanner together (default)"
         echo "  help     - Show this help message"
         echo ""
         echo "Examples:"
-        echo "  ./run_ui.sh                    # Run UI on port 5000"
-        echo "  ./run_ui.sh ui 8000            # Run UI on port 8000"
-        echo "  ./run_ui.sh both 5000          # Run scanner + UI"
+        echo "  ./run_ui.sh                    # Run on port 5000"
+        echo "  ./run_ui.sh ui 8000            # Run on port 8000"
+        echo ""
+        echo "Note: This starts both the scanner and web UI in a single process."
         ;;
     
     *)

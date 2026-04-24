@@ -46,10 +46,11 @@ exit /b 1
 
 :ui_mode
 echo.
-echo Starting Web UI Server...
+echo Starting Web UI + Scanner...
 echo Dashboard will be available at: http://localhost:%PORT%
 echo.
-python src/api.py --port %PORT%
+set PORT=%PORT%
+python src\main.py
 exit /b 0
 
 :help_mode

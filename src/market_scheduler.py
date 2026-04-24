@@ -347,7 +347,26 @@ class MarketScheduler:
             return False
         
         return True
-    
+
+    def is_market_hours(self) -> bool:
+        """
+        Check if current time is within market hours (9:15 AM - 3:30 PM IST),
+        regardless of whether it's a trading day.
+        """
+        now = datetime.now(self.ist)
+        current_time = now.time()
+        market_open = dt_time(self.MARKET_OPEN_HOUR, self.MARKET_OPEN_MINUTE)
+        market_close = dt_time(self.MARKET_CLOSE_HOUR, self.MARKET_CLOSE_MINUTE)
+        return market_open <= current_time <= market_close
+
+    def get_market_status(self) -> str:
+        """
+        Get current market status as a string.
+        Returns:
+            "OPEN" if market is open, "CLOSED" otherwise
+        """
+        return "OPEN" if self.is_market_open() else "CLOSED"
+
     def get_time_until_market_open(self) -> Optional[float]:
         """
         Get seconds until market opens next.

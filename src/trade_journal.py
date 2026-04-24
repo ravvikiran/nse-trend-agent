@@ -421,7 +421,11 @@ class TradeJournal:
             if trade.get('trade_id') == trade_id:
                 return trade
         return None
-    
+
+    def get_trade_by_id(self, trade_id: str) -> Optional[Dict[str, Any]]:
+        """Alias for get_trade (API compatibility)."""
+        return self.get_trade(trade_id)
+
     def check_signal_exists(self, symbol: str, strategy: str, entry: float = 0, tolerance: float = 0.5) -> Optional[Dict[str, Any]]:
         """
         Check if a signal already exists in the journal.
@@ -460,7 +464,11 @@ class TradeJournal:
     def get_active_trades(self) -> List[Dict[str, Any]]:
         """Get all active (open) trades."""
         return [t for t in self.trades if t.get('outcome') == self.OUTCOME_OPEN]
-    
+
+    def get_all_trades(self) -> List[Dict[str, Any]]:
+        """Get all trades (open and closed)."""
+        return self.trades
+
     def get_all_symbols(self) -> set:
         """Get all unique symbols from the journal (for deduplication)."""
         symbols = set()

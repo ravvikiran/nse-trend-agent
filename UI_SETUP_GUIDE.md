@@ -54,7 +54,7 @@ source .venv/bin/activate
 python src/api.py
 ```
 
-The dashboard will be available at: **http://localhost:5000**
+The dashboard will be available at: **http://localhost:5000** or **http://localhost:5050**
 
 ### Option 2: Integrated with Scanner
 
