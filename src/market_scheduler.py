@@ -583,6 +583,7 @@ class MarketScheduler:
     def schedule_jobs(self):
         """Schedule the scan jobs using APScheduler with CronTrigger."""
         scan_trigger = CronTrigger(
+            hour='9-15',
             minute='0,15,30,45',
             day_of_week='0,1,2,3,4',
             timezone=self.ist
