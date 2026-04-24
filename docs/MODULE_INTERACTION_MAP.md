@@ -390,14 +390,14 @@ Logs show: "Scanning 20 stocks... Generated 0 signals"
 **Diagnosis Steps**:
 ```python
 # Step 1: Check data fetching
-from src.data_fetcher import DataFetcher
+from src.core.data_fetcher import DataFetcher
 fetcher = DataFetcher()
 df = fetcher.fetch_stock_data('TCS')
 if df.empty or df is None:
     print("ERROR: No data returned")
     
 # Step 2: Check indicators
-from src.indicator_engine import IndicatorEngine
+from src.core.indicator_engine import IndicatorEngine
 engine = IndicatorEngine()
 df = engine.calculate_indicators(df)
 print(df[['close', 'ema_20', 'ema_50', 'rsi']].tail())
@@ -405,7 +405,7 @@ if df['ema_20'].isna().all():
     print("ERROR: Indicators not calculated")
 
 # Step 3: Check detection logic
-from src.trend_detector import TrendDetector
+from src.core.trend_detector import TrendDetector
 detector = TrendDetector()
 signal = detector.detect_trend(df)
 print(f"Trend signal: {signal}")
@@ -432,7 +432,7 @@ Logs show: "Generated 2 signals out of 20 stocks"
 **Diagnosis**:
 ```python
 # Check individual strategy performance
-from src.performance_tracker import StrategyPerformanceTracker
+from src.trade.performance_tracker import StrategyPerformanceTracker
 tracker = StrategyPerformanceTracker()
 stats = tracker.get_all_strategy_stats()
 
@@ -465,7 +465,7 @@ Logs show: "TCS: 3 signals generated in one scan"
 **Diagnosis**:
 ```python
 # Check signal memory
-from src.signal_memory import SignalMemory
+from src.ai.signal_memory import SignalMemory
 memory = SignalMemory()
 print(f"Recent signals: {memory.recent_signals}")
 
@@ -553,7 +553,7 @@ with open('config/settings.json') as f:
     print(f"Token (first 10): {config['alerts']['telegram_token'][:10]}...")
     
 # Step 2: Test alert service directly
-from src.alert_service import AlertService
+from src.notifications.alert_service import AlertService
 service = AlertService()
 try:
     service.send_alert("Test message from NSE Agent")
@@ -639,7 +639,7 @@ Logs show: "ERROR: Failed to fetch TCS after 3 retries"
 **Diagnosis**:
 ```python
 # Test data fetcher
-from src.data_fetcher import DataFetcher
+from src.core.data_fetcher import DataFetcher
 fetcher = DataFetcher()
 
 tickers = ['TCS', 'INFY', 'RELIANCE']
@@ -738,7 +738,7 @@ Week 3: 41% win rate (getting worse!)
 **Diagnosis**:
 ```python
 # Check learning data
-from src.pattern_learning_recognizer import PatternLearningRecognizer
+from src.ai.pattern_learning_recognizer import PatternLearningRecognizer
 learner = PatternLearningRecognizer()
 report = learner.get_learning_report()
 
@@ -752,7 +752,7 @@ for regime, data in report.get('by_regime', {}).items():
     print(f"  {regime}: {data['win_rate']}%")
 
 # Check if optimization is running
-from src.strategy_optimizer import StrategyOptimizer
+from src.trade.strategy_optimizer import StrategyOptimizer
 optimizer = StrategyOptimizer()
 weights = optimizer.get_dynamic_weights()
 print(f"\nStrategy weights: {weights}")
@@ -837,9 +837,9 @@ But together they fail
 **Diagnosis**:
 ```python
 # Test component integration
-from src.trend_detector import TrendDetector
-from src.ai_stock_analyzer import AIStockAnalyzer
-from src.reasoning_engine import ReasoningEngine
+from src.core.trend_detector import TrendDetector
+from src.ai.ai_stock_analyzer import AIStockAnalyzer
+from src.ai.reasoning_engine import ReasoningEngine
 
 # Step 1: Trend detection
 detector = TrendDetector()
@@ -877,9 +877,9 @@ When something breaks:
 □ Check logs: tail -f logs/nse_trend_agent.log
 □ Check config: cat config/settings.json | python -m json.tool
 □ Check data: cat data/trade_journal.json | python -m json.tool | head -20
-□ Test data fetch: python -c "from src.data_fetcher import DataFetcher; ..."
+□ Test data fetch: python -c "from src.core.data_fetcher import DataFetcher; ..."
 □ Test internet: ping 8.8.8.8
-□ Check market hours: python -c "from src.market_scheduler import ..."
+□ Check market hours: python -c "from src.scheduler.market_scheduler import ..."
 □ Verify API keys: echo $OPENAI_API_KEY (not in logs!)
 □ Check Telegram bot: Send test message manually
 □ Review recent changes: git log --oneline -5

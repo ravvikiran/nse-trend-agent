@@ -12,14 +12,14 @@ from typing import Optional, Dict, Any, List, Callable
 from datetime import datetime
 
 try:
-    from src.trend_detector import TrendSignal
+    from src.core.trend_detector import TrendSignal
 except ImportError:
-    from trend_detector import TrendSignal
+    from core.trend_detector import TrendSignal
 
 try:
-    from src.ai_stock_analyzer import create_analyzer, AIStockAnalyzer
+    from src.ai.ai_stock_analyzer import create_analyzer, AIStockAnalyzer
 except ImportError:
-    from ai_stock_analyzer import create_analyzer, AIStockAnalyzer
+    from ai.ai_stock_analyzer import create_analyzer, AIStockAnalyzer
 
 # Configure logging
 logger = logging.getLogger(__name__)

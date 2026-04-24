@@ -14,8 +14,8 @@
 
 ### Step 1: Add imports to main.py
 ```python
-from signal_intelligence_explainer import create_signal_intelligence_explainer
-from pattern_learning_recognizer import create_pattern_learning_recognizer
+from notifications.signal_intelligence_explainer import create_signal_intelligence_explainer
+from ai.pattern_learning_recognizer import create_pattern_learning_recognizer
 ```
 
 ### Step 2: Initialize in __init__

@@ -164,7 +164,7 @@ def _run_all_strategies(self, stocks_data):
     ...docstring...
     NEW: Applies learning-based filtering to reject signals based on historical failures.
     """
-    from trade_journal import TradeJournal
+    from trade.trade_journal import TradeJournal
     
     excluded_stocks = self.signal_memory.get_excluded_stocks()
     market_context = self.market_context_engine.get_context()

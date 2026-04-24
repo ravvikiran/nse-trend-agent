@@ -11,14 +11,14 @@ from typing import Dict, Any, List, Optional, Tuple
 import json
 
 try:
-    from .data_fetcher import DataFetcher
+    from core.data_fetcher import DataFetcher
 except ImportError:
-    from data_fetcher import DataFetcher
+    from src.core.data_fetcher import DataFetcher
 
 try:
-    from .history_manager import HistoryManager
+    from core.history_manager import HistoryManager
 except ImportError:
-    from history_manager import HistoryManager
+    from src.core.history_manager import HistoryManager
 
 logger = logging.getLogger(__name__)
 

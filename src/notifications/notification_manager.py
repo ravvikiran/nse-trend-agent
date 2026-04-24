@@ -12,7 +12,7 @@ import json
 try:
     from .alert_service import AlertService
 except ImportError:
-    from alert_service import AlertService
+    from notifications.alert_service import AlertService
 
 logger = logging.getLogger(__name__)
 
@@ -474,7 +474,7 @@ Threshold: {threshold:.2f}%
         # Save preferences
         try:
             # Use data directory from project root
-            data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+            data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'data')
             prefs_file = os.path.join(data_dir, 'notification_preferences.json')
             os.makedirs(data_dir, exist_ok=True)
             

@@ -65,7 +65,7 @@ src/
 ### 1. Top5 Selection (in main.py)
 
 ```python
-from signal_scorer import SignalScorer
+from strategies.signal_scorer import SignalScorer
 
 # After collecting all signals from all strategies:
 all_signals = trend_signals + verc_signals + mtf_signals

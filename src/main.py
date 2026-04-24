@@ -20,58 +20,58 @@ logger = logging.getLogger(__name__)
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from data_fetcher import DataFetcher
-from indicator_engine import IndicatorEngine
-from trend_detector import TrendDetector
-from alert_service import AlertService, TelegramBotHandler, MockAlertService
-from market_scheduler import MarketScheduler
-from volume_compression import scan_stocks as verc_scan_stocks
-from ai_stock_analyzer import create_analyzer
+from core.data_fetcher import DataFetcher
+from core.indicator_engine import IndicatorEngine
+from core.trend_detector import TrendDetector
+from notifications.alert_service import AlertService, TelegramBotHandler, MockAlertService
+from scheduler.market_scheduler import MarketScheduler
+from strategies.volume_compression import scan_stocks as verc_scan_stocks
+from ai.ai_stock_analyzer import create_analyzer
 
 # New modules for Reasoning + Learning
-from reasoning_engine import create_reasoning_engine
-from history_manager import create_history_manager
-from signal_tracker import create_signal_tracker
-from performance_tracker import create_performance_tracker
-from notification_manager import create_notification_manager
+from ai.reasoning_engine import create_reasoning_engine
+from core.history_manager import create_history_manager
+from trade.signal_tracker import create_signal_tracker
+from trade.performance_tracker import create_performance_tracker
+from notifications.notification_manager import create_notification_manager
 
 # New modules for Memory and AI-driven rules
-from signal_memory import create_signal_memory
-from ai_rules_engine import create_ai_rules_engine
+from ai.signal_memory import create_signal_memory
+from ai.ai_rules_engine import create_ai_rules_engine
 
 # New MTF Strategy Module
-from mtf_strategy import MTFStrategyScanner, format_mtf_signal_alert, create_mtf_scanner
+from strategies.mtf_strategy import MTFStrategyScanner, format_mtf_signal_alert, create_mtf_scanner
 
 # New Swing Trade Scanner
-from swing_trade_scanner import SwingTradeScanner, format_swing_signal_alert, create_swing_scanner
+from strategies.swing_trade_scanner import SwingTradeScanner, format_swing_signal_alert, create_swing_scanner
 
 # New Options Scanner
-from options_scanner import OptionsScanner, format_options_signal_alert, create_options_scanner
+from strategies.options_scanner import OptionsScanner, format_options_signal_alert, create_options_scanner
 
 # NEW: Market Sentiment Analysis & AI-Driven Scanning
-from market_sentiment_analyzer import create_market_sentiment_analyzer
-from sentiment_driven_scanner import create_sentiment_driven_scanner
+from market.market_sentiment_analyzer import create_market_sentiment_analyzer
+from strategies.sentiment_driven_scanner import create_sentiment_driven_scanner
 
 # Enhanced Signal Validation
-from signal_validator_enhanced import create_enhanced_validator
+from trade.signal_validator_enhanced import create_enhanced_validator
 
 # Trade Journal & Strategy Performance
-from trade_journal import create_trade_journal
-from strategy_optimizer import create_strategy_performance_tracker
-from ai_learning_layer import create_ai_learning_layer
+from trade.trade_journal import create_trade_journal
+from trade.strategy_optimizer import create_strategy_performance_tracker
+from ai.ai_learning_layer import create_ai_learning_layer
 
 # New: Factor Analyzer & Market Context
-from factor_analyzer import create_factor_analyzer
-from market_context import create_market_context_engine
+from market.factor_analyzer import create_factor_analyzer
+from market.market_context import create_market_context_engine
 
 # Trade Validator
-from trade_validator import create_trade_validator
+from trade.trade_validator import create_trade_validator
 
 # Consolidation Detector
-from consolidation_detector import is_tight_consolidation, is_valid_breakout, is_strong_breakout
+from core.consolidation_detector import is_tight_consolidation, is_valid_breakout, is_strong_breakout
 
 # Agent Controller - Makes scanner Agentic AI
-from agent_controller import create_agent_controller, AgentAction
+from ai.agent_controller import create_agent_controller, AgentAction
 
 # Flask API integration
 from api import init_api as init_flask_api, app as flask_app
@@ -731,7 +731,7 @@ Loss: -{loss_pct:.1f}%
 
                 all_signals = []
                 
-                from trade_journal import TradeJournal
+                from trade.trade_journal import TradeJournal
                 
                 if self.strategy in ['trend', 'all']:
                     trend_signals = self._get_trend_signals(stocks_data)
@@ -1059,7 +1059,7 @@ Loss: -{loss_pct:.1f}%
                 return
             
             # Calculate indicators for each timeframe
-            from indicator_engine import IndicatorEngine
+            from core.indicator_engine import IndicatorEngine
             engine = IndicatorEngine()
             
             all_indicators = {}
@@ -1271,7 +1271,7 @@ Loss: -{loss_pct:.1f}%
         
         NEW: Applies learning-based filtering to reject signals based on historical failures.
         """
-        from trade_journal import TradeJournal
+        from trade.trade_journal import TradeJournal
         
         excluded_stocks = self.signal_memory.get_excluded_stocks()
         
@@ -2674,7 +2674,7 @@ Loss: -{loss_pct:.1f}%"""
             
             all_signals = []
             
-            from trade_journal import TradeJournal
+            from trade.trade_journal import TradeJournal
             
             if self.strategy in ['trend', 'all']:
                 trend_signals = self._get_trend_signals(stocks_data)
@@ -2938,7 +2938,7 @@ Loss: -{loss_pct:.1f}%"""
             
             all_signals = []
             
-            from trade_journal import TradeJournal
+            from trade.trade_journal import TradeJournal
             
             if self.strategy in ['trend', 'all']:
                 trend_signals = self._get_trend_signals(stocks_data)

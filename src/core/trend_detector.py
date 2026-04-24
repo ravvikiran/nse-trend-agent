@@ -100,7 +100,7 @@ class TrendDetector:
 
     def __init__(self):
         """Initialize the TrendDetector."""
-        from indicator_engine import IndicatorEngine
+        from core.indicator_engine import IndicatorEngine
         from datetime import date
         self.engine = IndicatorEngine()
         self.alerted_today = set()
@@ -210,9 +210,9 @@ class TrendDetector:
             Dictionary with condition results
         """
         try:
-            from indicator_engine import IndicatorEngine
+            from core.indicator_engine import IndicatorEngine
         except ImportError:
-            from indicator_engine import IndicatorEngine
+            from core.indicator_engine import IndicatorEngine
         engine = IndicatorEngine()
         return {
             'ema_alignment': engine.check_ema_alignment(indicators),
@@ -231,9 +231,9 @@ class TrendDetector:
             Dictionary with scan condition results
         """
         try:
-            from indicator_engine import IndicatorEngine
+            from core.indicator_engine import IndicatorEngine
         except ImportError:
-            from indicator_engine import IndicatorEngine
+            from core.indicator_engine import IndicatorEngine
         engine = IndicatorEngine()
         return {
             'scan_a_trend_structure': engine.check_trend_structure(indicators),
@@ -341,7 +341,7 @@ class TrendDetector:
                 if df is None or df.empty:
                     continue
                 
-                from indicator_engine import IndicatorEngine
+                from core.indicator_engine import IndicatorEngine
                 engine = IndicatorEngine()
                 
                 # Calculate indicators

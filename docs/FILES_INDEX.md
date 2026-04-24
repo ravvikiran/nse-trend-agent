@@ -132,8 +132,8 @@
 
 **Update 1: Add Imports (Line ~49)**
 ```python
-from market_sentiment_analyzer import create_market_sentiment_analyzer
-from sentiment_driven_scanner import create_sentiment_driven_scanner
+from market.market_sentiment_analyzer import create_market_sentiment_analyzer
+from strategies.sentiment_driven_scanner import create_sentiment_driven_scanner
 ```
 
 **Update 2: Initialize in __init__ (Lines ~185-193)**

@@ -24512,3 +24512,115 @@ Stock: ICICIBANK.NS
 2026-04-24 21:09:57,483 - werkzeug - INFO - 127.0.0.1 - - [24/Apr/2026 21:09:57] "GET /api/performance/pnl-curve HTTP/1.1" 200 -
 2026-04-24 21:10:34,210 - apscheduler.scheduler - INFO - Scheduler has been shut down
 2026-04-24 21:10:34,221 - __main__ - INFO - NSE Trend Scanner stopped - Total scans: 0, Total signals: 0
+2026-04-25 00:34:20,496 - __main__ - INFO - Loaded 750 stocks from /Users/ravikiran/Documents/nse-trend-agent/config/stocks.json
+2026-04-25 00:34:20,496 - __main__ - INFO - Settings loaded from config/settings.json
+2026-04-25 00:34:20,496 - __main__ - WARNING - Telegram configuration incomplete (missing token or chat ID), alerts disabled
+2026-04-25 00:34:20,564 - ai.ai_stock_analyzer - INFO - Ollama provider initialized
+2026-04-25 00:34:20,564 - ai.ai_stock_analyzer - INFO - Initialized 1 AI providers
+2026-04-25 00:34:20,590 - core.history_manager - INFO - HistoryManager initialized. Active: 0, History: 0
+2026-04-25 00:34:20,590 - trade.trade_journal - INFO - TradeJournal initialized. Active trades: 0
+2026-04-25 00:34:20,590 - trade.signal_tracker - INFO - SignalTracker initialized with trade_journal=True
+2026-04-25 00:34:20,590 - trade.performance_tracker - INFO - PerformanceTracker initialized
+2026-04-25 00:34:20,590 - ai.reasoning_engine - INFO - ReasoningEngine initialized with weights: {'ema_alignment': 0.15, 'volume_confirmation': 0.15, 'rsi_position': 0.1, 'atr_volatility': 0.1, 'verc_score': 0.2, 'rsi_divergence': 0.1, 'market_context': 0.1, 'price_momentum': 0.1}
+2026-04-25 00:34:20,590 - notifications.notification_manager - INFO - NotificationManager initialized
+2026-04-25 00:34:20,590 - ai.signal_memory - INFO - SignalMemory initialized. Total signals: 2, Active: 0
+2026-04-25 00:34:20,591 - ai.signal_memory - INFO - Synced 0 active and 0 historical signals
+2026-04-25 00:34:20,591 - trade.strategy_optimizer - INFO - StrategyPerformanceTracker initialized
+2026-04-25 00:34:20,591 - ai.ai_learning_layer - INFO - AILearningLayer initialized (Strict Mode)
+2026-04-25 00:34:20,591 - market.factor_analyzer - INFO - FactorAnalyzer initialized
+2026-04-25 00:34:20,591 - market.market_context - INFO - MarketContextEngine initialized
+2026-04-25 00:34:20,591 - market.market_sentiment_analyzer - INFO - MarketSentimentAnalyzer initialized
+2026-04-25 00:34:20,591 - strategies.sentiment_driven_scanner - INFO - SentimentDrivenScanner initialized
+2026-04-25 00:34:20,591 - __main__ - INFO - Market Sentiment Analyzer and Sentiment-Driven Scanner initialized
+2026-04-25 00:34:20,591 - __main__ - INFO - Initialized Enhanced Signal Validator with min score: 6.0
+2026-04-25 00:34:20,591 - ai.agent_controller - INFO - AgentController initialized - Scanner is now Agentic
+2026-04-25 00:34:20,591 - api - INFO - API initialized with required instances
+2026-04-25 00:34:20,591 - __main__ - INFO - Flask API initialized with scanner components
+2026-04-25 00:34:20,591 - __main__ - INFO - Flask API started on port 5050
+2026-04-25 00:34:20,591 - __main__ - INFO - NSE Trend Scanner started - Strategy: all, Stocks: 750, Max Signals: 4, Active Signals: 0
+2026-04-25 00:34:20,591 - __main__ - INFO - Running startup notification scan...
+2026-04-25 00:34:20,621 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5050
+ * Running on http://192.168.0.181:5050
+2026-04-25 00:34:20,621 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-04-25 00:34:24,988 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:24] "GET /api/dashboard HTTP/1.1" 200 -
+2026-04-25 00:34:24,992 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:24] "GET /api/market-status HTTP/1.1" 200 -
+2026-04-25 00:34:24,992 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:24] "GET /api/trades/open HTTP/1.1" 200 -
+2026-04-25 00:34:24,993 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:24] "GET /api/performance/summary HTTP/1.1" 200 -
+2026-04-25 00:34:25,120 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:25] "GET /api/performance/pnl-curve HTTP/1.1" 200 -
+2026-04-25 00:34:26,185 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:26] "GET / HTTP/1.1" 200 -
+2026-04-25 00:34:26,564 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:26] "[36mGET /static/css/dashboard.css HTTP/1.1[0m" 304 -
+2026-04-25 00:34:26,564 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:26] "[36mGET /static/js/dashboard.js HTTP/1.1[0m" 304 -
+2026-04-25 00:34:26,585 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:26] "GET /api/dashboard HTTP/1.1" 200 -
+2026-04-25 00:34:26,586 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:26] "GET /api/market-status HTTP/1.1" 200 -
+2026-04-25 00:34:26,586 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:26] "GET /api/trades/open HTTP/1.1" 200 -
+2026-04-25 00:34:26,586 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:26] "GET /api/performance/summary HTTP/1.1" 200 -
+2026-04-25 00:34:26,615 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:26] "GET /api/performance/pnl-curve HTTP/1.1" 200 -
+2026-04-25 00:34:33,549 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:33] "POST /api/scanner/start HTTP/1.1" 200 -
+2026-04-25 00:34:35,172 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:35] "GET /api/dashboard HTTP/1.1" 200 -
+2026-04-25 00:34:35,173 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:35] "GET /api/market-status HTTP/1.1" 200 -
+2026-04-25 00:34:35,174 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:35] "GET /api/trades/open HTTP/1.1" 200 -
+2026-04-25 00:34:35,175 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:35] "GET /api/performance/summary HTTP/1.1" 200 -
+2026-04-25 00:34:35,185 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:35] "GET /api/performance/pnl-curve HTTP/1.1" 200 -
+2026-04-25 00:34:41,589 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:41] "GET /trades HTTP/1.1" 200 -
+2026-04-25 00:34:41,591 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:41] "[36mGET /static/js/trades.js HTTP/1.1[0m" 304 -
+2026-04-25 00:34:41,890 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:41] "[36mGET /static/css/dashboard.css HTTP/1.1[0m" 304 -
+2026-04-25 00:34:41,899 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:41] "GET /api/trades/open HTTP/1.1" 200 -
+2026-04-25 00:34:41,901 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:41] "GET /api/trades/history?limit=100&days=30 HTTP/1.1" 200 -
+2026-04-25 00:34:43,769 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:43] "GET /performance HTTP/1.1" 200 -
+2026-04-25 00:34:43,771 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:43] "GET /static/js/performance.js HTTP/1.1" 200 -
+2026-04-25 00:34:44,076 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:44] "[36mGET /static/css/dashboard.css HTTP/1.1[0m" 304 -
+2026-04-25 00:34:44,077 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:44] "GET /static/js/performance.js HTTP/1.1" 200 -
+2026-04-25 00:34:44,083 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:44] "GET /api/performance/summary HTTP/1.1" 200 -
+2026-04-25 00:34:44,107 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:44] "GET /api/performance/by-strategy HTTP/1.1" 200 -
+2026-04-25 00:34:44,108 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:44] "GET /api/performance/pnl-curve HTTP/1.1" 200 -
+2026-04-25 00:34:45,764 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:45] "GET /analysis HTTP/1.1" 200 -
+2026-04-25 00:34:45,770 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:45] "[36mGET /static/js/analysis.js HTTP/1.1[0m" 304 -
+2026-04-25 00:34:46,084 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:46] "[36mGET /static/css/dashboard.css HTTP/1.1[0m" 304 -
+2026-04-25 00:34:46,099 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:46] "GET /api/analysis/market-sentiment HTTP/1.1" 200 -
+2026-04-25 00:34:46,101 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:46] "GET /api/analysis/signals-generated?days=30 HTTP/1.1" 200 -
+2026-04-25 00:34:46,115 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:46] "GET /api/trades/history?limit=500 HTTP/1.1" 200 -
+2026-04-25 00:34:47,095 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:47] "GET /settings HTTP/1.1" 200 -
+2026-04-25 00:34:47,102 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:47] "[36mGET /static/js/settings.js HTTP/1.1[0m" 304 -
+2026-04-25 00:34:47,410 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:47] "[36mGET /static/css/dashboard.css HTTP/1.1[0m" 304 -
+2026-04-25 00:34:47,426 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:47] "GET /api/settings HTTP/1.1" 200 -
+2026-04-25 00:34:48,940 - __main__ - INFO - Signal GRAPHITE.NS rejected by trade validator: Invalid BUY structure
+2026-04-25 00:34:48,940 - __main__ - ERROR - Error in startup notification scan: cannot access local variable 'skipped_candidates' where it is not associated with a value
+2026-04-25 00:34:48,946 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-04-25 00:34:48,946 - scheduler.market_scheduler - INFO - Continuous monitoring job scheduled: every 15 minutes during market hours (9:15-15:30 IST) on weekdays
+2026-04-25 00:34:48,947 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-04-25 00:34:48,947 - scheduler.market_scheduler - INFO - Continuous monitoring job scheduled: every 15 minutes during market hours (9:15-15:30 IST) on weekdays
+2026-04-25 00:34:48,947 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-04-25 00:34:48,947 - scheduler.market_scheduler - INFO - Signal generation job scheduled: 11:00 IST on weekdays
+2026-04-25 00:34:48,947 - __main__ - INFO - Added signal generation job at 11:00 IST
+2026-04-25 00:34:48,947 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-04-25 00:34:48,947 - scheduler.market_scheduler - INFO - Signal generation job scheduled: 15:00 IST on weekdays
+2026-04-25 00:34:48,947 - __main__ - INFO - Added signal generation job at 15:00 IST
+2026-04-25 00:34:48,947 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-04-25 00:34:48,947 - scheduler.market_scheduler - INFO - Scheduled jobs: market scan (0,15,30,45); custom signal generation at configured alert_hours
+2026-04-25 00:34:48,947 - apscheduler.scheduler - INFO - Added job "Continuous Monitor (every 15 min during market hours 9:15-15:30 IST)" to job store "default"
+2026-04-25 00:34:48,947 - apscheduler.scheduler - INFO - Added job "Continuous Monitor (every 15 min during market hours 9:15-15:30 IST)" to job store "default"
+2026-04-25 00:34:48,947 - apscheduler.scheduler - INFO - Added job "Signal Generator (daily at 11:00 IST)" to job store "default"
+2026-04-25 00:34:48,947 - apscheduler.scheduler - INFO - Added job "Signal Generator (daily at 15:00 IST)" to job store "default"
+2026-04-25 00:34:48,948 - apscheduler.scheduler - INFO - Added job "Market Scan (every 15 min at :00, :15, :30, :45)" to job store "default"
+2026-04-25 00:34:48,948 - apscheduler.scheduler - INFO - Scheduler started
+2026-04-25 00:34:48,948 - __main__ - INFO - Scheduler started - Continuous monitor: every 15min, Signal gen: 15:00 IST
+2026-04-25 00:34:56,721 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:56] "GET / HTTP/1.1" 200 -
+2026-04-25 00:34:56,724 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:56] "[36mGET /static/css/dashboard.css HTTP/1.1[0m" 304 -
+2026-04-25 00:34:56,725 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:56] "[36mGET /static/js/dashboard.js HTTP/1.1[0m" 304 -
+2026-04-25 00:34:56,740 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:56] "[36mGET /static/css/dashboard.css HTTP/1.1[0m" 304 -
+2026-04-25 00:34:56,741 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:56] "[36mGET /static/js/dashboard.js HTTP/1.1[0m" 304 -
+2026-04-25 00:34:56,749 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:56] "GET /api/dashboard HTTP/1.1" 200 -
+2026-04-25 00:34:56,751 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:56] "GET /api/market-status HTTP/1.1" 200 -
+2026-04-25 00:34:56,751 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:56] "GET /api/trades/open HTTP/1.1" 200 -
+2026-04-25 00:34:56,751 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:56] "GET /api/performance/summary HTTP/1.1" 200 -
+2026-04-25 00:34:56,766 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:34:56] "GET /api/performance/pnl-curve HTTP/1.1" 200 -
+2026-04-25 00:35:00,270 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:35:00] "POST /api/scanner/stop HTTP/1.1" 200 -
+2026-04-25 00:35:02,217 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:35:02] "GET /api/dashboard HTTP/1.1" 200 -
+2026-04-25 00:35:02,225 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:35:02] "GET /api/market-status HTTP/1.1" 200 -
+2026-04-25 00:35:02,225 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:35:02] "GET /api/trades/open HTTP/1.1" 200 -
+2026-04-25 00:35:02,226 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:35:02] "GET /api/performance/summary HTTP/1.1" 200 -
+2026-04-25 00:35:02,233 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:35:02] "GET /api/performance/pnl-curve HTTP/1.1" 200 -
+2026-04-25 00:35:10,950 - apscheduler.scheduler - INFO - Scheduler has been shut down
+2026-04-25 00:35:10,951 - __main__ - INFO - NSE Trend Scanner stopped - Total scans: 0, Total signals: 0

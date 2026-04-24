@@ -57,12 +57,12 @@ This guide shows exactly where to add the code.
 
 ```python
 # Add these imports alongside existing ones
-from signal_intelligence_explainer import (
+from notifications.signal_intelligence_explainer import (
     create_signal_intelligence_explainer,
     SignalIntelligence,
     ReasoningChain
 )
-from pattern_learning_recognizer import (
+from ai.pattern_learning_recognizer import (
     create_pattern_learning_recognizer,
     PatternPerformance
 )

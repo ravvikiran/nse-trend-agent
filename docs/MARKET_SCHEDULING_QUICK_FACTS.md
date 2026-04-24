@@ -109,7 +109,7 @@ DEBUG: Skipping: Market not open
 ## 🧪 Quick Test
 
 ```python
-from src.market_scheduler import MarketScheduler
+from src.scheduler.market_scheduler import MarketScheduler
 from datetime import date
 
 ms = MarketScheduler()

@@ -15,19 +15,19 @@ from flask_cors import CORS
 import pytz
 
 try:
-    from trade_journal import TradeJournal, Trade
-    from signal_tracker import create_signal_tracker
-    from performance_tracker import create_performance_tracker
-    from data_fetcher import DataFetcher
-    from market_scheduler import MarketScheduler
-    from history_manager import create_history_manager
+    from trade.trade_journal import TradeJournal, Trade
+    from trade.signal_tracker import create_signal_tracker
+    from trade.performance_tracker import create_performance_tracker
+    from core.data_fetcher import DataFetcher
+    from scheduler.market_scheduler import MarketScheduler
+    from core.history_manager import create_history_manager
 except ImportError:
-    from src.trade_journal import TradeJournal, Trade
-    from src.signal_tracker import create_signal_tracker
-    from src.performance_tracker import create_performance_tracker
-    from src.data_fetcher import DataFetcher
-    from src.market_scheduler import MarketScheduler
-    from src.history_manager import create_history_manager
+    from src.trade.trade_journal import TradeJournal, Trade
+    from src.trade.signal_tracker import create_signal_tracker
+    from src.trade.performance_tracker import create_performance_tracker
+    from src.core.data_fetcher import DataFetcher
+    from src.scheduler.market_scheduler import MarketScheduler
+    from src.core.history_manager import create_history_manager
 
 logger = logging.getLogger(__name__)
 

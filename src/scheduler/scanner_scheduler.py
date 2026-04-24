@@ -80,7 +80,7 @@ class ScannerScheduler:
         # Wrap function with market check to skip on holidays
         def market_aware_func():
             try:
-                from src.market_scheduler import MarketScheduler
+                from scheduler.market_scheduler import MarketScheduler
                 ms = MarketScheduler()
                 if ms.is_market_open():
                     return func()
@@ -117,7 +117,7 @@ class ScannerScheduler:
         # Wrap function with market check to skip on holidays
         def market_aware_signal_func():
             try:
-                from src.market_scheduler import MarketScheduler
+                from scheduler.market_scheduler import MarketScheduler
                 ms = MarketScheduler()
                 # Check if today is a working day (not holiday)
                 from datetime import date

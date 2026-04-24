@@ -318,9 +318,9 @@ python -m src.main --test
 ### Testing Individual Component
 ```python
 # test_trend_detector.py
-from src.data_fetcher import DataFetcher
-from src.indicator_engine import IndicatorEngine
-from src.trend_detector import TrendDetector
+from src.core.data_fetcher import DataFetcher
+from src.core.indicator_engine import IndicatorEngine
+from src.core.trend_detector import TrendDetector
 
 fetcher = DataFetcher()
 engine = IndicatorEngine()
@@ -336,7 +336,7 @@ print(f"Score: {signal.score if signal else 'None'}")
 
 ### Testing Signal Validation
 ```python
-from src.signal_intelligence_explainer import SignalIntelligenceExplainer
+from src.notifications.signal_intelligence_explainer import SignalIntelligenceExplainer
 
 explainer = SignalIntelligenceExplainer()
 intelligent = explainer.explain_signal(combined_signal, market_data)
@@ -418,14 +418,14 @@ for attempt in range(3):
 
 ### Fetch stock data
 ```python
-from src.data_fetcher import DataFetcher
+from src.core.data_fetcher import DataFetcher
 fetcher = DataFetcher()
 df = fetcher.fetch_stock_data('TCS', interval='1d', days=200)
 ```
 
 ### Calculate indicators
 ```python
-from src.indicator_engine import IndicatorEngine
+from src.core.indicator_engine import IndicatorEngine
 engine = IndicatorEngine()
 df = engine.calculate_indicators(df)
 print(df[['close', 'ema_20', 'rsi', 'atr']].tail())
@@ -433,7 +433,7 @@ print(df[['close', 'ema_20', 'rsi', 'atr']].tail())
 
 ### Detect trend
 ```python
-from src.trend_detector import TrendDetector
+from src.core.trend_detector import TrendDetector
 detector = TrendDetector()
 signal = detector.detect_trend(df)
 if signal:
@@ -442,7 +442,7 @@ if signal:
 
 ### Score signal
 ```python
-from src.reasoning_engine import ReasoningEngine
+from src.ai.reasoning_engine import ReasoningEngine
 engine = ReasoningEngine()
 score = engine.calculate_weighted_score(indicators, rules)
 print(f"Score: {score.final_score}")
@@ -450,7 +450,7 @@ print(f"Score: {score.final_score}")
 
 ### Explain signal
 ```python
-from src.signal_intelligence_explainer import SignalIntelligenceExplainer
+from src.notifications.signal_intelligence_explainer import SignalIntelligenceExplainer
 explainer = SignalIntelligenceExplainer()
 intelligent = explainer.explain_signal(combined_signal, market_data)
 print(f"Valid: {intelligent.is_valid}")
@@ -459,7 +459,7 @@ print(f"Explanation: {intelligent.explanation_text}")
 
 ### Send alert
 ```python
-from src.alert_service import AlertService
+from src.notifications.alert_service import AlertService
 alert_service = AlertService()
 alert_service.send_alert("🤖 BUY TCS @ 3450")
 ```
@@ -507,7 +507,7 @@ print(f"Rejection rate: {(len(all_signals) - len(sent_signals)) / len(all_signal
 
 ### Check strategy breakdown
 ```python
-from src.performance_tracker import StrategyPerformanceTracker
+from src.trade.performance_tracker import StrategyPerformanceTracker
 tracker = StrategyPerformanceTracker()
 stats = tracker.get_all_strategy_stats()
 for strategy, stat in stats.items():
@@ -516,7 +516,7 @@ for strategy, stat in stats.items():
 
 ### Check learning insights
 ```python
-from src.pattern_learning_recognizer import PatternLearningRecognizer
+from src.ai.pattern_learning_recognizer import PatternLearningRecognizer
 learner = PatternLearningRecognizer()
 report = learner.get_learning_report()
 print(json.dumps(report, indent=2))

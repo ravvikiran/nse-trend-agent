@@ -380,7 +380,7 @@ If you encounter issues:
 2. **Verify settings** in `config/settings.json`
 3. **Test manually**:
    ```python
-   from market_sentiment_analyzer import create_market_sentiment_analyzer
+   from market.market_sentiment_analyzer import create_market_sentiment_analyzer
    analyzer = create_market_sentiment_analyzer()
    sentiment = analyzer.analyze_market_sentiment()
    print(sentiment)

@@ -35,8 +35,8 @@ Your NSE trend scanner now includes a comprehensive AI-driven market sentiment a
 ### `src/main.py` (3 changes)
 1. **Line ~49**: Added imports for new modules
    ```python
-   from market_sentiment_analyzer import create_market_sentiment_analyzer
-   from sentiment_driven_scanner import create_sentiment_driven_scanner
+   from market.market_sentiment_analyzer import create_market_sentiment_analyzer
+   from strategies.sentiment_driven_scanner import create_sentiment_driven_scanner
    ```
 
 2. **Lines ~185-193**: Initialized sentiment analyzer and scanner in `__init__`

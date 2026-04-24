@@ -182,7 +182,7 @@ class SignalScorer:
 In your `main.py` (or equivalent), after generating all signals:
 
 ```python
-from signal_scorer import SignalScorer
+from strategies.signal_scorer import SignalScorer
 
 # In __init__:
 self.signal_scorer = SignalScorer()
@@ -316,7 +316,7 @@ class SignalMemory:
     def _fetch_current_price(self, symbol: str) -> float:
         """Call your exchange API to get current price."""
         # Use your existing data_fetcher
-        # from data_fetcher import DataFetcher
+        # from core.data_fetcher import DataFetcher
         # fetcher = DataFetcher()
         # return fetcher.get_current_price(symbol)
         pass
@@ -396,7 +396,7 @@ original_signal: {previous['generated_at']}
 In `main.py`, where signals are sent:
 
 ```python
-from signal_memory import SignalMemory
+from ai.signal_memory import SignalMemory
 signal_memory = SignalMemory()
 
 def process_signal(self, signal: Dict):
@@ -850,7 +850,7 @@ In `main.py`, add learning cycle:
 
 ```python
 from pattern_learning import PatternLearning
-from strategy_optimizer import StrategyOptimizer
+from trade.strategy_optimizer import StrategyOptimizer
 
 # In __init__:
 self.trade_journal = TradeJournal()

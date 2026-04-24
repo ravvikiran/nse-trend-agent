@@ -512,8 +512,8 @@ class PatternLearning:
 In `main.py`:
 
 ```python
-from trade_journal import TradeJournal
-from strategy_optimizer import StrategyOptimizer
+from trade.trade_journal import TradeJournal
+from trade.strategy_optimizer import StrategyOptimizer
 from pattern_learning import PatternLearning
 
 # In __init__:

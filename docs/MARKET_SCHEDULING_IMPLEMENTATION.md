@@ -228,7 +228,7 @@ In `config/settings.json`:
 ### Test 1: Check Market Status Now
 
 ```python
-from src.market_scheduler import MarketScheduler
+from src.scheduler.market_scheduler import MarketScheduler
 
 ms = MarketScheduler()
 print(f"Is market open? {ms.is_market_open()}")

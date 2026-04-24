@@ -127,7 +127,7 @@ Comprehensive check that returns `True` only if:
 - Current time is between 9:15 AM - 3:30 PM IST
 
 ```python
-from src.market_scheduler import MarketScheduler
+from src.scheduler.market_scheduler import MarketScheduler
 
 scheduler = MarketScheduler()
 
@@ -389,7 +389,7 @@ NSE_HOLIDAYS_DATES = [
 ### Manual Test 1: Check Current Market Status
 
 ```python
-from src.market_scheduler import MarketScheduler
+from src.scheduler.market_scheduler import MarketScheduler
 from datetime import datetime
 
 ms = MarketScheduler()
@@ -448,7 +448,7 @@ print(json.dumps(status, indent=2, default=str))
 **Solution**:
 ```python
 # Check market status
-from src.market_scheduler import MarketScheduler
+from src.scheduler.market_scheduler import MarketScheduler
 ms = MarketScheduler()
 
 # Should return False on weekends
@@ -476,7 +476,7 @@ print(f"Is Oct 31 a holiday? {is_holiday}")  # Should be True
 
 **Solution**:
 ```python
-from src.market_scheduler import MarketScheduler
+from src.scheduler.market_scheduler import MarketScheduler
 ms = MarketScheduler()
 
 # Check current market status
