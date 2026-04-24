@@ -38,9 +38,9 @@ def calculate_atr(df: pd.DataFrame, period: int = 14) -> float:
 def is_tight_consolidation(
     df: Optional[pd.DataFrame],
     lookback: int = 10,
-    max_range_pct: float = 4.0,
-    max_atr_pct: float = 2.0,
-    require_consistency: bool = True
+    max_range_pct: float = 6.0,
+    max_atr_pct: float = 3.0,
+    require_consistency: bool = False
 ) -> bool:
     """
     Check if price was in tight consolidation over the lookback period.
@@ -175,8 +175,8 @@ def is_strong_breakout(df: Optional[pd.DataFrame]) -> bool:
     
     breakout_strength = ((candle["close"] - high_20) / candle["close"]) * 100
     
-    is_strong = body_ratio > 0.6 and breakout_strength > 1.5
-    
+    is_strong = body_ratio >= 0.5 and breakout_strength >= 1.0
+
     if not is_strong:
         logger.debug(f"Weak breakout: body_ratio={body_ratio:.2f}, strength={breakout_strength:.2f}")
     

@@ -37,19 +37,19 @@ class TradeValidator:
     
     def __init__(self, settings: Optional[Dict[str, Any]] = None):
         default_filters = {
-            "min_rr": 2.0,
-            "min_target1_pct": 5.0,
-            "max_target1_pct": 10.0,
-            "min_sl_pct": 2.0,
-            "max_sl_pct": 3.0,
-            "min_breakout_strength": 2.0,
-            "min_volume_ratio": 1.3,
-            "max_rsi_buy": 70.0,
-            "min_rsi_sell": 30.0,
-            "min_confidence": 7.0,
-            "max_recent_move": 8.0,
-            "max_consolidation_range": 4.0,
-            "min_distance_sr": 3.0,
+            "min_rr": 1.5,
+            "min_target1_pct": 3.0,
+            "max_target1_pct": 15.0,
+            "min_sl_pct": 1.0,
+            "max_sl_pct": 5.0,
+            "min_breakout_strength": 1.0,
+            "min_volume_ratio": 1.1,
+            "max_rsi_buy": 75.0,
+            "min_rsi_sell": 25.0,
+            "min_confidence": 5.0,
+            "max_recent_move": 10.0,
+            "max_consolidation_range": 6.0,
+            "min_distance_sr": 2.5,
         }
         
         if settings:

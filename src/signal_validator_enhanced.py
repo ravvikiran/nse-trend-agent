@@ -22,7 +22,7 @@ class EnhancedSignalValidator:
     5. Risk/reward ratio
     """
     
-    def __init__(self, min_score: float = 6.0, ai_analyzer=None):
+    def __init__(self, min_score: float = 5.0, ai_analyzer=None):
         """
         Initialize validator.
         
@@ -32,7 +32,7 @@ class EnhancedSignalValidator:
         """
         self.min_score = min_score
         self.ai_analyzer = ai_analyzer
-        self.max_sl_percent = 0.05  # 5% max stop loss (reasonable risk)
+        self.max_sl_percent = 0.07  # 7% max stop loss (reasonable risk)
         
     def validate_signal_before_sending(
         self, 
@@ -155,9 +155,20 @@ class EnhancedSignalValidator:
         # Get recent price action (last 20 candles)
         recent = df.tail(20).copy()
         
-        highs = recent['High'].values
-        lows = recent['Low'].values
-        closes = recent['Close'].values
+        def _get_col(df, name):
+            if name in df.columns:
+                return df[name]
+            low_name = name.lower()
+            up_name = name.upper()
+            if low_name in df.columns:
+                return df[low_name]
+            if up_name in df.columns:
+                return df[up_name]
+            raise KeyError(name)
+
+        highs = _get_col(recent, 'High').values
+        lows = _get_col(recent, 'Low').values
+        closes = _get_col(recent, 'Close').values
         
         # Check for Higher Highs and Higher Lows (uptrend structure)
         hh_count = 0  # Higher Highs count
@@ -177,14 +188,14 @@ class EnhancedSignalValidator:
             return False, f"Weak uptrend structure: HH {hh_ratio*100:.0f}%, HL {hl_ratio*100:.0f}%"
         
         # Check for consolidation (not too much volatility before breakout)
-        volatility = (recent['High'].max() - recent['Low'].min()) / recent['Close'].mean()
+        volatility = (_get_col(recent, 'High').max() - _get_col(recent, 'Low').min()) / _get_col(recent, 'Close').mean()
         
-        if volatility > 0.15:  # More than 15% range
+        if volatility > 0.20:  # More than 20% range
             return False, f"High volatility {volatility*100:.1f}% - risky entry"
         
         # Check recent breakout confirmation
         recent_close = closes[-1]
-        ema20 = recent['Close'].ewm(span=20).mean().iloc[-1] if 'Close' in recent else None
+        ema20 = _get_col(recent, 'Close').ewm(span=20).mean().iloc[-1]
         
         if ema20 and recent_close < ema20:
             return False, "Price below EMA20 - not in uptrend"

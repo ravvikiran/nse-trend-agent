@@ -596,37 +596,40 @@ class MarketScheduler:
             replace_existing=True
         )
         
-        pm_trigger = CronTrigger(
-            hour=self.PM_UPDATE_HOUR,
-            minute=self.PM_UPDATE_MINUTE,
-            day_of_week='0,1,2,3,4',
-            timezone=self.ist
-        )
+        # Disabled built-in PM/AM update jobs to avoid duplication with custom alert schedule
+        # Custom signal generation jobs are added via add_signal_generation_job at configurable hours
+        #
+        # pm_trigger = CronTrigger(
+        #     hour=self.PM_UPDATE_HOUR,
+        #     minute=self.PM_UPDATE_MINUTE,
+        #     day_of_week='0,1,2,3,4',
+        #     timezone=self.ist
+        # )
+        #
+        # self.scheduler.add_job(
+        #     self.run_pm_update,
+        #     trigger=pm_trigger,
+        #     id='pm_update',
+        #     name=f'Signal Generator (daily at {self.PM_UPDATE_HOUR}:{self.PM_UPDATE_MINUTE:02d} IST)',
+        #     replace_existing=True
+        # )
+        #
+        # am_trigger = CronTrigger(
+        #     hour=self.AM_UPDATE_HOUR,
+        #     minute=self.AM_UPDATE_MINUTE,
+        #     day_of_week='0,1,2,3,4',
+        #     timezone=self.ist
+        # )
+        #
+        # self.scheduler.add_job(
+        #     self.run_am_update,
+        #     trigger=am_trigger,
+        #     id='am_update',
+        #     name=f'Morning Signal Alert (daily at {self.AM_UPDATE_HOUR}:{self.AM_UPDATE_MINUTE:02d} IST)',
+        #     replace_existing=True
+        # )
         
-        self.scheduler.add_job(
-            self.run_pm_update,
-            trigger=pm_trigger,
-            id='pm_update',
-            name=f'Signal Generator (daily at {self.PM_UPDATE_HOUR}:{self.PM_UPDATE_MINUTE:02d} IST)',
-            replace_existing=True
-        )
-        
-        am_trigger = CronTrigger(
-            hour=self.AM_UPDATE_HOUR,
-            minute=self.AM_UPDATE_MINUTE,
-            day_of_week='0,1,2,3,4',
-            timezone=self.ist
-        )
-        
-        self.scheduler.add_job(
-            self.run_am_update,
-            trigger=am_trigger,
-            id='am_update',
-            name=f'Morning Signal Alert (daily at {self.AM_UPDATE_HOUR}:{self.AM_UPDATE_MINUTE:02d} IST)',
-            replace_existing=True
-        )
-        
-        logger.info("Scheduled jobs: market scan (0,15,30,45), 3PM signal generator, 10AM alert")
+        logger.info("Scheduled jobs: market scan (0,15,30,45); custom signal generation at configured alert_hours")
     
     def start(self):
         """Start the scheduler."""
@@ -707,24 +710,26 @@ class MarketScheduler:
         
         logger.info(f"Continuous monitoring job scheduled: every {self.SCAN_INTERVAL} minutes during market hours (9:15-15:30 IST) on weekdays")
     
-    def add_signal_generation_job(self, func: Callable, job_id: str = 'signal_generator') -> None:
-        """Add signal generation job - runs once daily at 3:00 PM IST on weekdays."""
+    def add_signal_generation_job(self, func: Callable, job_id: str = 'signal_generator', hour: Optional[int] = None) -> None:
+        """Add signal generation job - runs once daily at specified hour on weekdays.
+        If hour not provided, defaults to 15 (3 PM)."""
+        trigger_hour = hour if hour is not None else self.PM_UPDATE_HOUR
         trigger = CronTrigger(
-            hour=self.PM_UPDATE_HOUR,
+            hour=trigger_hour,
             minute=self.PM_UPDATE_MINUTE,
             day_of_week='0,1,2,3,4',
             timezone=self.ist
         )
-        
+
         self.scheduler.add_job(
             func,
             trigger=trigger,
             id=job_id,
-            name=f'Signal Generator (daily at {self.PM_UPDATE_HOUR}:{self.PM_UPDATE_MINUTE:02d} IST)',
+            name=f'Signal Generator (daily at {trigger_hour}:{self.PM_UPDATE_MINUTE:02d} IST)',
             replace_existing=True
         )
-        
-        logger.info(f"Signal generation job scheduled: {self.PM_UPDATE_HOUR}:{self.PM_UPDATE_MINUTE:02d} IST on weekdays")
+
+        logger.info(f"Signal generation job scheduled: {trigger_hour}:{self.PM_UPDATE_MINUTE:02d} IST on weekdays")
 
 
 def create_scheduler(scan_callback: Callable) -> MarketScheduler:
