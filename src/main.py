@@ -3116,7 +3116,6 @@ def main():
     if args.schedule:
         # Load full config - try file first, then environment variables
         import json
-        logger = logging.getLogger(__name__)
         config = None
         settings_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
