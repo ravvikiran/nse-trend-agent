@@ -1,4 +1,4 @@
-// NSE Trend Scanner - Dashboard JavaScript
+// Quant Labs India - Dashboard JavaScript
 
 let winLossChart = null;
 let pnlChart = null;
@@ -22,7 +22,7 @@ function updateCurrentTime() {
     const now = new Date();
     const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
     const timeStr = ist.toLocaleTimeString('en-IN');
-    
+    document.getElementById('current-time').textContent = timeStr;
     document.getElementById('market-time').textContent = timeStr;
 }
 
@@ -153,7 +153,12 @@ function initCharts() {
             maintainAspectRatio: true,
             plugins: {
                 legend: {
-                    position: 'bottom'
+                    position: 'bottom',
+                    labels: {
+                        padding: 20,
+                        usePointStyle: true,
+                        pointStyle: 'rectRounded'
+                    }
                 }
             }
         }
@@ -183,7 +188,13 @@ function initCharts() {
             plugins: {
                 legend: {
                     display: true,
-                    position: 'top'
+                    position: 'top',
+                    align: 'start',
+                    labels: {
+                        padding: 20,
+                        usePointStyle: true,
+                        pointStyle: 'rectRounded'
+                    }
                 }
             },
             scales: {
