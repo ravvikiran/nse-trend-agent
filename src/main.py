@@ -2672,6 +2672,8 @@ Loss: -{loss_pct:.1f}%"""
                 logger.warning("Startup scan - No data fetched from server")
                 return
             
+            skipped_candidates = []
+            
             all_signals = []
             
             from trade.trade_journal import TradeJournal
