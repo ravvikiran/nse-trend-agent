@@ -21,6 +21,7 @@ try:
     from core.data_fetcher import DataFetcher
     from scheduler.market_scheduler import MarketScheduler
     from core.history_manager import create_history_manager
+    from watchlist.watchlist_manager import WatchlistManager
 except ImportError:
     from src.trade.trade_journal import TradeJournal, Trade
     from src.trade.signal_tracker import create_signal_tracker
@@ -28,6 +29,7 @@ except ImportError:
     from src.core.data_fetcher import DataFetcher
     from src.scheduler.market_scheduler import MarketScheduler
     from src.core.history_manager import create_history_manager
+    from src.watchlist.watchlist_manager import WatchlistManager
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,7 @@ data_fetcher: Optional[DataFetcher] = None
 market_scheduler: Optional[MarketScheduler] = None
 performance_tracker: Optional[Any] = None
 history_manager: Optional[Any] = None
+watchlist_manager: Optional[WatchlistManager] = None
 scanner_state = {
     "running": False,
     "last_scan": None,
@@ -55,6 +58,7 @@ def init_api(
     market_scheduler_inst: MarketScheduler,
     performance_tracker_inst: Any = None,
     history_manager_inst: Any = None,
+    watchlist_manager_inst: Optional[WatchlistManager] = None,
 ):
     """Initialize API with required instances."""
     global \
@@ -62,12 +66,14 @@ def init_api(
         data_fetcher, \
         market_scheduler, \
         performance_tracker, \
-        history_manager
+        history_manager, \
+        watchlist_manager
     trade_journal = trade_journal_inst
     data_fetcher = data_fetcher_inst
     market_scheduler = market_scheduler_inst
     performance_tracker = performance_tracker_inst
     history_manager = history_manager_inst
+    watchlist_manager = watchlist_manager_inst
     logger.info("API initialized with required instances")
 
 
@@ -607,6 +613,103 @@ def stop_scanner():
 
 
 # ============================================================================
+# WATCHLIST ENDPOINTS
+# ============================================================================
+
+
+@app.route("/api/watchlist", methods=["GET"])
+def get_watchlist():
+    """Get watchlist items with technical analysis."""
+    try:
+        if not watchlist_manager:
+            return jsonify({"error": "Watchlist service not available"}), 503
+
+        items = watchlist_manager.get_watchlist_with_analysis()
+        return jsonify({
+            "watchlist": items,
+            "count": len(items)
+        })
+    except Exception as e:
+        logger.error(f"Error getting watchlist: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/watchlist", methods=["POST"])
+def add_to_watchlist():
+    """Add stock(s) to watchlist."""
+    try:
+        if not watchlist_manager:
+            return jsonify({"error": "Watchlist service not available"}), 503
+
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        symbols = data.get('symbols', [])
+        if not symbols:
+            return jsonify({"error": "No symbols provided"}), 400
+
+        # Handle both single string and list
+        if isinstance(symbols, str):
+            symbols = [symbols]
+
+        results = watchlist_manager.add_multiple_stocks(symbols)
+
+        added = [s for s, success in results.items() if success]
+        skipped = [s for s, success in results.items() if not success]
+
+        return jsonify({
+            "success": True,
+            "added": added,
+            "skipped": skipped,
+            "message": f"Added {len(added)} stock(s) to watchlist"
+        })
+    except Exception as e:
+        logger.error(f"Error adding to watchlist: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/watchlist/<symbol>", methods=["DELETE"])
+def remove_from_watchlist(symbol: str):
+    """Remove a stock from watchlist."""
+    try:
+        if not watchlist_manager:
+            return jsonify({"error": "Watchlist service not available"}), 503
+
+        success = watchlist_manager.remove_stock(symbol)
+        if success:
+            return jsonify({
+                "success": True,
+                "message": f"Removed {symbol} from watchlist"
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "message": f"Stock {symbol} not found in watchlist"
+            }), 404
+    except Exception as e:
+        logger.error(f"Error removing from watchlist: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/watchlist/analyze/<symbol>", methods=["GET"])
+def analyze_watchlist_stock(symbol: str):
+    """Get detailed analysis for a specific watchlist stock."""
+    try:
+        if not watchlist_manager:
+            return jsonify({"error": "Watchlist service not available"}), 503
+
+        analysis = watchlist_manager.analyze_stock(symbol)
+        if not analysis:
+            return jsonify({"error": f"Could not analyze {symbol}"}), 404
+
+        return jsonify(analysis.to_dict())
+    except Exception as e:
+        logger.error(f"Error analyzing {symbol}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
 
@@ -751,6 +854,12 @@ def analysis_page():
 def settings_page():
     """Settings page."""
     return render_template("settings.html")
+
+
+@app.route("/watchlist")
+def watchlist_page():
+    """Watchlist management page."""
+    return render_template("watchlist.html")
 
 
 if __name__ == "__main__":

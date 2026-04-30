@@ -73,6 +73,9 @@ from core.consolidation_detector import is_tight_consolidation, is_valid_breakou
 # Agent Controller - Makes scanner Agentic AI
 from ai.agent_controller import create_agent_controller, AgentAction
 
+# Watchlist Manager
+from watchlist.watchlist_manager import WatchlistManager
+
 # Flask API integration
 from api import init_api as init_flask_api, app as flask_app
 
@@ -3332,6 +3335,14 @@ def main():
         enable_telegram_bot=args.enable_telegram_bot
     )
 
+    # Initialize WatchlistManager
+    watchlist_manager = WatchlistManager(
+        data_dir='data',
+        data_fetcher=scanner.data_fetcher,
+        indicator_engine=scanner.indicator_engine
+    )
+    logger.info("WatchlistManager initialized")
+
     # Initialize Flask API with scanner instances
     try:
         init_flask_api(
@@ -3339,7 +3350,8 @@ def main():
             data_fetcher_inst=scanner.data_fetcher,
             market_scheduler_inst=scanner.scheduler,
             performance_tracker_inst=scanner.performance_tracker,
-            history_manager_inst=scanner.history_manager
+            history_manager_inst=scanner.history_manager,
+            watchlist_manager_inst=watchlist_manager
         )
         logger.info("Flask API initialized with scanner components")
     except Exception as e:
