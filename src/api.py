@@ -33,7 +33,9 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__, template_folder="../templates", static_folder="../static")
+app = Flask(__name__, 
+    template_folder=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates"),
+    static_folder=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static"))
 CORS(app)
 
 # Global instances
@@ -68,13 +70,29 @@ def init_api(
         performance_tracker, \
         history_manager, \
         watchlist_manager
+
+    logger.info(f"init_api called with watchlist_manager_inst = {watchlist_manager_inst}")
+    if watchlist_manager_inst:
+        logger.info(f"  watchlist_manager type: {type(watchlist_manager_inst)}")
+    else:
+        logger.warning("  watchlist_manager_inst is None or not provided!")
+
+    # Set globals
     trade_journal = trade_journal_inst
     data_fetcher = data_fetcher_inst
     market_scheduler = market_scheduler_inst
     performance_tracker = performance_tracker_inst
     history_manager = history_manager_inst
     watchlist_manager = watchlist_manager_inst
-    logger.info("API initialized with required instances")
+
+    # Log and verify
+    logger.info("API initialized with scanner components")
+    logger.info(f"  trade_journal: {'OK' if trade_journal else 'None'}")
+    logger.info(f"  data_fetcher: {'OK' if data_fetcher else 'None'}")
+    logger.info(f"  market_scheduler: {'OK' if market_scheduler else 'None'}")
+    logger.info(f"  performance_tracker: {'OK' if performance_tracker else 'None'}")
+    logger.info(f"  history_manager: {'OK' if history_manager else 'None'}")
+    logger.info(f"  watchlist_manager: {'OK' if watchlist_manager else 'None'}")
 
 
 # ============================================================================
@@ -593,8 +611,19 @@ def get_scanner_status():
 def start_scanner():
     """Start the scanner."""
     try:
+        # Update state
         scanner_state["running"] = True
         scanner_state["last_scan"] = datetime.now().isoformat()
+
+        # Actually resume the APScheduler if it exists and is not running
+        if market_scheduler and hasattr(market_scheduler, 'scheduler'):
+            try:
+                if not market_scheduler.running:
+                    market_scheduler.scheduler.resume()
+                    logger.info("APScheduler resumed via API")
+            except Exception as e:
+                logger.warning(f"Could not resume scheduler: {e}")
+
         return jsonify({"success": True, "message": "Scanner started"})
     except Exception as e:
         logger.error(f"Error starting scanner: {e}")
@@ -605,7 +634,18 @@ def start_scanner():
 def stop_scanner():
     """Stop the scanner."""
     try:
+        # Update state
         scanner_state["running"] = False
+
+        # Actually pause the APScheduler if it exists and is running
+        if market_scheduler and hasattr(market_scheduler, 'scheduler'):
+            try:
+                if market_scheduler.running:
+                    market_scheduler.scheduler.pause()
+                    logger.info("APScheduler paused via API")
+            except Exception as e:
+                logger.warning(f"Could not pause scheduler: {e}")
+
         return jsonify({"success": True, "message": "Scanner stopped"})
     except Exception as e:
         logger.error(f"Error stopping scanner: {e}")
@@ -621,6 +661,7 @@ def stop_scanner():
 def get_watchlist():
     """Get watchlist items with technical analysis."""
     try:
+        logger.debug(f"get_watchlist called: watchlist_manager = {watchlist_manager}")
         if not watchlist_manager:
             return jsonify({"error": "Watchlist service not available"}), 503
 
@@ -630,7 +671,7 @@ def get_watchlist():
             "count": len(items)
         })
     except Exception as e:
-        logger.error(f"Error getting watchlist: {e}")
+        logger.error(f"Error getting watchlist: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 

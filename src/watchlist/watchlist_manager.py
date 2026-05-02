@@ -199,7 +199,7 @@ class WatchlistManager:
 
         try:
             # Fetch stock data (200 days for EMA200)
-            df = self.data_fetcher.fetch_stock_data(symbol, interval='1D', days=200)
+            df = self.data_fetcher.fetch_stock_data(symbol, interval='1d', days=200)
             if df is None or df.empty:
                 logger.warning(f"No data fetched for {symbol}")
                 return None

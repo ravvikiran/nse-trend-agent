@@ -51,7 +51,7 @@ cd /Users/ravikiran/Documents/nse-trend-agent
 source .venv/bin/activate
 
 # Run the API server
-python src/api.py
+python src/main.py
 ```
 
 The dashboard will be available at: **http://localhost:5000** or **http://localhost:5050**

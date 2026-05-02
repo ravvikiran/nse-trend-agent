@@ -24624,3 +24624,118 @@ Stock: ICICIBANK.NS
 2026-04-25 00:35:02,233 - werkzeug - INFO - 127.0.0.1 - - [25/Apr/2026 00:35:02] "GET /api/performance/pnl-curve HTTP/1.1" 200 -
 2026-04-25 00:35:10,950 - apscheduler.scheduler - INFO - Scheduler has been shut down
 2026-04-25 00:35:10,951 - __main__ - INFO - NSE Trend Scanner stopped - Total scans: 0, Total signals: 0
+2026-05-02 18:14:37,481 - __main__ - INFO - Loaded 750 stocks from /Users/ravikiran/Documents/nse-trend-agent/config/stocks.json
+2026-05-02 18:14:37,481 - __main__ - INFO - Settings loaded from config/settings.json
+2026-05-02 18:14:37,481 - __main__ - WARNING - Telegram configuration incomplete (missing token or chat ID), alerts disabled
+2026-05-02 18:14:37,552 - ai.ai_stock_analyzer - INFO - Ollama provider initialized
+2026-05-02 18:14:37,552 - ai.ai_stock_analyzer - INFO - Initialized 1 AI providers
+2026-05-02 18:14:37,575 - core.history_manager - INFO - HistoryManager initialized. Active: 0, History: 0
+2026-05-02 18:14:37,575 - trade.trade_journal - INFO - TradeJournal initialized. Active trades: 0
+2026-05-02 18:14:37,575 - trade.signal_tracker - INFO - SignalTracker initialized with trade_journal=True
+2026-05-02 18:14:37,576 - trade.performance_tracker - INFO - PerformanceTracker initialized
+2026-05-02 18:14:37,576 - ai.reasoning_engine - INFO - ReasoningEngine initialized with weights: {'ema_alignment': 0.15, 'volume_confirmation': 0.15, 'rsi_position': 0.1, 'atr_volatility': 0.1, 'verc_score': 0.2, 'rsi_divergence': 0.1, 'market_context': 0.1, 'price_momentum': 0.1}
+2026-05-02 18:14:37,576 - notifications.notification_manager - INFO - NotificationManager initialized
+2026-05-02 18:14:37,576 - ai.signal_memory - INFO - SignalMemory initialized. Total signals: 2, Active: 0
+2026-05-02 18:14:37,577 - ai.signal_memory - INFO - Synced 0 active and 0 historical signals
+2026-05-02 18:14:37,577 - trade.strategy_optimizer - INFO - StrategyPerformanceTracker initialized
+2026-05-02 18:14:37,577 - ai.ai_learning_layer - INFO - AILearningLayer initialized (Strict Mode)
+2026-05-02 18:14:37,577 - market.factor_analyzer - INFO - FactorAnalyzer initialized
+2026-05-02 18:14:37,577 - market.market_context - INFO - MarketContextEngine initialized
+2026-05-02 18:14:37,577 - market.market_sentiment_analyzer - INFO - MarketSentimentAnalyzer initialized
+2026-05-02 18:14:37,577 - strategies.sentiment_driven_scanner - INFO - SentimentDrivenScanner initialized
+2026-05-02 18:14:37,577 - __main__ - INFO - Market Sentiment Analyzer and Sentiment-Driven Scanner initialized
+2026-05-02 18:14:37,577 - __main__ - INFO - Initialized Enhanced Signal Validator with min score: 6.0
+2026-05-02 18:14:37,577 - ai.agent_controller - INFO - AgentController initialized - Scanner is now Agentic
+2026-05-02 18:14:37,578 - watchlist.watchlist_manager - INFO - Loaded 1 items from watchlist
+2026-05-02 18:14:37,578 - watchlist.watchlist_manager - INFO - WatchlistManager initialized. Items: 1
+2026-05-02 18:14:37,578 - __main__ - INFO - WatchlistManager initialized: <watchlist.watchlist_manager.WatchlistManager object at 0x10f64f410>, items: 1
+2026-05-02 18:14:37,578 - __main__ - INFO - Calling init_flask_api with watchlist_manager...
+2026-05-02 18:14:37,578 - api - INFO - init_api called with watchlist_manager_inst = <watchlist.watchlist_manager.WatchlistManager object at 0x10f64f410>
+2026-05-02 18:14:37,578 - api - INFO -   watchlist_manager type: <class 'watchlist.watchlist_manager.WatchlistManager'>
+2026-05-02 18:14:37,578 - api - INFO - API initialized with scanner components
+2026-05-02 18:14:37,578 - api - INFO -   trade_journal: OK
+2026-05-02 18:14:37,578 - api - INFO -   data_fetcher: OK
+2026-05-02 18:14:37,578 - api - INFO -   market_scheduler: OK
+2026-05-02 18:14:37,578 - api - INFO -   performance_tracker: OK
+2026-05-02 18:14:37,578 - api - INFO -   history_manager: OK
+2026-05-02 18:14:37,578 - api - INFO -   watchlist_manager: OK
+2026-05-02 18:14:37,578 - __main__ - INFO - After init: api.watchlist_manager = <watchlist.watchlist_manager.WatchlistManager object at 0x10f64f410>
+2026-05-02 18:14:37,578 - __main__ - INFO - Flask API initialized with scanner components
+2026-05-02 18:14:37,578 - __main__ - INFO - Flask API started on port 5050
+2026-05-02 18:14:37,578 - __main__ - INFO - NSE Trend Scanner started - Strategy: all, Stocks: 750, Max Signals: 4, Active Signals: 0
+2026-05-02 18:14:37,578 - __main__ - INFO - Running startup notification scan...
+2026-05-02 18:14:37,593 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5050
+ * Running on http://192.168.0.158:5050
+2026-05-02 18:14:37,593 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-05-02 18:14:42,612 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:14:42] "GET /api/watchlist HTTP/1.1" 200 -
+2026-05-02 18:15:11,604 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:15:11] "GET /watchlist HTTP/1.1" 200 -
+2026-05-02 18:15:11,644 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:15:11] "GET /static/css/dashboard.css HTTP/1.1" 200 -
+2026-05-02 18:15:11,645 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:15:11] "[36mGET /static/js/watchlist.js HTTP/1.1[0m" 304 -
+2026-05-02 18:15:11,672 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:15:11] "[33mGET /favicon.ico HTTP/1.1[0m" 404 -
+2026-05-02 18:15:11,870 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:15:11] "GET /api/watchlist HTTP/1.1" 200 -
+2026-05-02 18:15:20,523 - __main__ - INFO - Signal DODLA.NS rejected by trade validator: Invalid BUY structure
+2026-05-02 18:15:20,523 - __main__ - INFO - Signal VGUARD.NS rejected by trade validator: SL too tight 0.71%
+2026-05-02 18:15:20,523 - __main__ - INFO - Signal ABCAPITAL.NS rejected by trade validator: SL too tight 0.43%
+2026-05-02 18:15:20,523 - __main__ - INFO - Signal EUREKAFORB.NS rejected by trade validator: Invalid BUY structure
+2026-05-02 18:15:20,523 - __main__ - INFO - Signal NSLNISP.NS rejected by trade validator: Sideways market
+2026-05-02 18:15:20,523 - __main__ - INFO - Signal POLYMED.NS rejected by trade validator: Sideways market
+2026-05-02 18:15:20,523 - __main__ - INFO - Signal CONCOR.NS rejected by trade validator: SL too tight 0.50%
+2026-05-02 18:15:20,523 - __main__ - INFO - Signal GABRIEL.NS rejected by trade validator: SL too tight 0.82%
+2026-05-02 18:15:20,523 - __main__ - INFO - Signal DBL.NS rejected by trade validator: Invalid BUY structure
+2026-05-02 18:15:20,524 - __main__ - INFO - Signal SAIL.NS rejected by trade validator: SL too tight 0.65%
+2026-05-02 18:15:20,524 - __main__ - INFO - Signal ELECTCAST.NS rejected by trade validator: Invalid BUY structure
+2026-05-02 18:15:20,524 - __main__ - INFO - Signal GMRP&UI.NS rejected by trade validator: Invalid BUY structure
+2026-05-02 18:15:20,524 - __main__ - INFO - Signal SANOFICONR.NS rejected by trade validator: Invalid BUY structure
+2026-05-02 18:15:20,524 - __main__ - INFO - Signal IDFCFIRSTB.NS rejected by trade validator: SL too tight 0.90%
+2026-05-02 18:15:20,524 - __main__ - INFO - Signal JMFINANCIL.NS rejected by trade validator: Invalid BUY structure
+2026-05-02 18:15:20,524 - __main__ - INFO - Signal AJAXENGG.NS rejected by trade validator: SL too tight 0.05%
+2026-05-02 18:15:20,524 - __main__ - INFO - Signal NCC.NS rejected by trade validator: SL too tight 0.16%
+2026-05-02 18:15:20,524 - __main__ - INFO - Signal IOB.NS rejected by trade validator: Invalid BUY structure
+2026-05-02 18:15:20,524 - __main__ - INFO - Startup no signals alert sent
+2026-05-02 18:15:20,530 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-02 18:15:20,530 - scheduler.market_scheduler - INFO - Continuous monitoring job scheduled: every 15 minutes during market hours (9:15-15:30 IST) on weekdays
+2026-05-02 18:15:20,530 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-02 18:15:20,530 - scheduler.market_scheduler - INFO - Continuous monitoring job scheduled: every 15 minutes during market hours (9:15-15:30 IST) on weekdays
+2026-05-02 18:15:20,530 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-02 18:15:20,530 - scheduler.market_scheduler - INFO - Signal generation job scheduled: 11:00 IST on weekdays
+2026-05-02 18:15:20,530 - __main__ - INFO - Added signal generation job at 11:00 IST
+2026-05-02 18:15:20,530 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-02 18:15:20,530 - scheduler.market_scheduler - INFO - Signal generation job scheduled: 15:00 IST on weekdays
+2026-05-02 18:15:20,530 - __main__ - INFO - Added signal generation job at 15:00 IST
+2026-05-02 18:15:20,530 - apscheduler.scheduler - INFO - Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-02 18:15:20,530 - scheduler.market_scheduler - INFO - Scheduled jobs: market scan (0,15,30,45); custom signal generation at configured alert_hours
+2026-05-02 18:15:20,530 - apscheduler.scheduler - INFO - Added job "Continuous Monitor (every 15 min during market hours 9:15-15:30 IST)" to job store "default"
+2026-05-02 18:15:20,531 - apscheduler.scheduler - INFO - Added job "Continuous Monitor (every 15 min during market hours 9:15-15:30 IST)" to job store "default"
+2026-05-02 18:15:20,531 - apscheduler.scheduler - INFO - Added job "Signal Generator (daily at 11:00 IST)" to job store "default"
+2026-05-02 18:15:20,531 - apscheduler.scheduler - INFO - Added job "Signal Generator (daily at 15:00 IST)" to job store "default"
+2026-05-02 18:15:20,531 - apscheduler.scheduler - INFO - Added job "Market Scan (every 15 min at :00, :15, :30, :45)" to job store "default"
+2026-05-02 18:15:20,531 - apscheduler.scheduler - INFO - Scheduler started
+2026-05-02 18:15:20,531 - __main__ - INFO - Scheduler started - Continuous monitor: every 15min, Signal gen: 15:00 IST
+2026-05-02 18:15:28,211 - watchlist.watchlist_manager - INFO - Added RELIANCE to watchlist
+2026-05-02 18:15:28,212 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:15:28] "POST /api/watchlist HTTP/1.1" 200 -
+2026-05-02 18:15:28,711 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:15:28] "GET /api/watchlist HTTP/1.1" 200 -
+2026-05-02 18:15:42,389 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:15:42] "GET /api/watchlist HTTP/1.1" 200 -
+2026-05-02 18:15:58,452 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:15:58] "GET /api/watchlist HTTP/1.1" 200 -
+2026-05-02 18:16:01,675 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:16:01] "GET /watchlist HTTP/1.1" 200 -
+2026-05-02 18:16:01,702 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:16:01] "[36mGET /static/css/dashboard.css HTTP/1.1[0m" 304 -
+2026-05-02 18:16:01,703 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:16:01] "[36mGET /static/js/watchlist.js HTTP/1.1[0m" 304 -
+2026-05-02 18:16:02,229 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:16:02] "GET /api/watchlist HTTP/1.1" 200 -
+2026-05-02 18:16:32,314 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:16:32] "GET /api/watchlist HTTP/1.1" 200 -
+2026-05-02 18:17:02,942 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:17:02] "GET /api/watchlist HTTP/1.1" 200 -
+2026-05-02 18:17:33,312 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:17:33] "GET /api/watchlist HTTP/1.1" 200 -
+2026-05-02 18:18:03,365 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:18:03] "GET /api/watchlist HTTP/1.1" 200 -
+2026-05-02 18:18:33,306 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:18:33] "GET /api/watchlist HTTP/1.1" 200 -
+2026-05-02 18:19:03,364 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:19:03] "GET /api/watchlist HTTP/1.1" 200 -
+2026-05-02 18:19:33,385 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:19:33] "GET /api/watchlist HTTP/1.1" 200 -
+2026-05-02 18:20:03,394 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:20:03] "GET /api/watchlist HTTP/1.1" 200 -
+2026-05-02 18:20:33,421 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:20:33] "GET /api/watchlist HTTP/1.1" 200 -
+2026-05-02 18:21:03,400 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:21:03] "GET /api/watchlist HTTP/1.1" 200 -
+2026-05-02 18:21:33,404 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:21:33] "GET /api/watchlist HTTP/1.1" 200 -
+2026-05-02 18:22:03,428 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:22:03] "GET /api/watchlist HTTP/1.1" 200 -
+2026-05-02 18:22:33,423 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:22:33] "GET /api/watchlist HTTP/1.1" 200 -
+2026-05-02 18:23:03,459 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:23:03] "GET /api/watchlist HTTP/1.1" 200 -
+2026-05-02 18:23:33,462 - werkzeug - INFO - 127.0.0.1 - - [02/May/2026 18:23:33] "GET /api/watchlist HTTP/1.1" 200 -
+2026-05-02 18:23:38,259 - apscheduler.scheduler - INFO - Scheduler has been shut down
+2026-05-02 18:23:38,259 - __main__ - INFO - NSE Trend Scanner stopped - Total scans: 0, Total signals: 0

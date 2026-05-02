@@ -42,49 +42,50 @@ function loadDashboardData() {
 
 // Update dashboard metrics
 function updateDashboardMetrics(dashboard, performance) {
-    // Market and scanner info
-    updateMarketStatusBadge(dashboard.market_status);
-    document.getElementById('market-status').textContent = dashboard.market_status;
-    
-    // Key metrics
-    document.getElementById('open-trades').textContent = dashboard.open_trades;
-    document.getElementById('win-rate').textContent = dashboard.win_rate + '%';
-    document.getElementById('total-trades').textContent = dashboard.total_trades;
-    
-    // P&L with color coding
-    const pnlElement = document.getElementById('total-pnl');
-    const totalPnl = dashboard.total_pnl || 0;
-    pnlElement.textContent = '₹' + formatCurrency(totalPnl);
-    pnlElement.style.color = totalPnl >= 0 ? '#198754' : '#dc3545';
-    
-    // P&L icon color
-    const pnlIcon = document.getElementById('pnl-icon');
-    pnlIcon.style.color = totalPnl >= 0 ? '#198754' : '#dc3545';
-    
-    // Scanner status
-    document.getElementById('scanner-running').innerHTML = 
-        scanner_state.running ? 
-        '<span class="badge bg-success status-active">Running</span>' : 
-        '<span class="badge bg-secondary">Stopped</span>';
-    
-    document.getElementById('total-scans').textContent = scanner_state.total_scans;
-    document.getElementById('signals-generated').textContent = scanner_state.signals_generated;
-    
-    if (scanner_state.last_scan) {
-        document.getElementById('last-scan').textContent = new Date(scanner_state.last_scan).toLocaleTimeString();
+        // Market and scanner info
+        updateMarketStatusBadge(dashboard.market_status);
+        document.getElementById('market-status').textContent = dashboard.market_status;
+        
+        // Key metrics
+        document.getElementById('open-trades').textContent = dashboard.open_trades;
+        document.getElementById('win-rate').textContent = dashboard.win_rate + '%';
+        document.getElementById('total-trades').textContent = dashboard.total_trades;
+        
+        // P&L with color coding
+        const pnlElement = document.getElementById('total-pnl');
+        const totalPnl = dashboard.total_pnl || 0;
+        pnlElement.textContent = '₹' + formatCurrency(totalPnl);
+        pnlElement.style.color = totalPnl >= 0 ? '#198754' : '#dc3545';
+        
+        // P&L icon color
+        const pnlIcon = document.getElementById('pnl-icon');
+        pnlIcon.style.color = totalPnl >= 0 ? '#198754' : '#dc3545';
+        
+        // Scanner status (from API response)
+        const scanner = dashboard.scanner_state;
+        document.getElementById('scanner-running').innerHTML = 
+            scanner.running ? 
+            '<span class="badge bg-success status-active">Running</span>' : 
+            '<span class="badge bg-secondary">Stopped</span>';
+        
+        document.getElementById('total-scans').textContent = scanner.total_scans;
+        document.getElementById('signals-generated').textContent = scanner.signals_generated;
+        
+        if (scanner.last_scan) {
+            document.getElementById('last-scan').textContent = new Date(scanner.last_scan).toLocaleTimeString();
+        }
+        
+        // Today's performance
+        if (dashboard.performance_metrics) {
+            document.getElementById('today-trades').textContent = dashboard.performance_metrics.today_trades;
+            document.getElementById('today-pnl').textContent = '₹' + formatCurrency(dashboard.performance_metrics.today_pnl);
+            document.getElementById('week-trades').textContent = dashboard.performance_metrics.this_week_trades;
+            document.getElementById('week-pnl').textContent = '₹' + formatCurrency(dashboard.performance_metrics.this_week_pnl);
+        }
+        
+        // Update charts
+        updateWinLossChart(dashboard);
     }
-    
-    // Today's performance
-    if (dashboard.performance_metrics) {
-        document.getElementById('today-trades').textContent = dashboard.performance_metrics.today_trades;
-        document.getElementById('today-pnl').textContent = '₹' + formatCurrency(dashboard.performance_metrics.today_pnl);
-        document.getElementById('week-trades').textContent = dashboard.performance_metrics.this_week_trades;
-        document.getElementById('week-pnl').textContent = '₹' + formatCurrency(dashboard.performance_metrics.this_week_pnl);
-    }
-    
-    // Update charts
-    updateWinLossChart(dashboard);
-}
 
 // Update market status
 function updateMarketStatus(status) {
@@ -209,71 +210,71 @@ function updateWinLossChart(dashboard) {
     
     // Update P&L curve
     fetch('/api/performance/pnl-curve')
-        .then(r => r.json())
+        .then(r => {
+            if (!r.ok) throw new Error('Network response was not ok');
+            return r.json();
+        })
         .then(data => {
-            if (pnlChart && data.length > 0) {
+            if (pnlChart && data && data.length > 0) {
                 pnlChart.data.labels = data.map(d => new Date(d.timestamp).toLocaleDateString());
                 pnlChart.data.datasets[0].data = data.map(d => d.cumulative_pnl);
                 pnlChart.update();
             }
-        });
-}
-
-// Update market status badge color
-function updateMarketStatusBadge(status) {
-    const card = document.getElementById('market-status-card');
-    if (status === 'OPEN') {
-        card.style.background = 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)';
-    } else {
-        card.style.background = 'linear-gradient(135deg, #1f1c2c 0%, #928dab 100%)';
-    }
-}
-
-// Scanner control functions
-function startScanner() {
-    fetch('/api/scanner/start', { method: 'POST' })
-        .then(r => r.json())
-        .then(data => {
-            if (data.success) {
-                alert('Scanner started successfully');
-                loadDashboardData();
-            }
         })
-        .catch(err => alert('Error starting scanner: ' + err));
+        .catch(error => console.error('Error loading P&L curve:', error));
 }
 
-function stopScanner() {
-    if (confirm('Are you sure you want to stop the scanner?')) {
-        fetch('/api/scanner/stop', { method: 'POST' })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    alert('Scanner stopped');
-                    loadDashboardData();
-                }
-            })
-            .catch(err => alert('Error stopping scanner: ' + err));
-    }
-}
+        // Update market status badge color
+        function updateMarketStatusBadge(status) {
+            const card = document.getElementById('market-status-card');
+            if (status === 'OPEN') {
+                card.style.background = 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)';
+            } else {
+                card.style.background = 'linear-gradient(135deg, #1f1c2c 0%, #928dab 100%)';
+            }
+        }
 
-// Utility functions
-function formatCurrency(value) {
-    if (!value) return '0.00';
-    return Math.abs(value).toFixed(2);
-}
+        // Scanner control functions
+        function startScanner() {
+            fetch('/api/scanner/start', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        alert('Scanner started successfully');
+                        loadDashboardData();
+                    }
+                })
+                .catch(err => alert('Error starting scanner: ' + err));
+        }
 
-// Cleanup on page unload
-window.addEventListener('beforeunload', function() {
-    if (dashboardRefreshInterval) {
-        clearInterval(dashboardRefreshInterval);
-    }
-});
+        function stopScanner() {
+            if (confirm('Are you sure you want to stop the scanner?')) {
+                fetch('/api/scanner/stop', { method: 'POST' })
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.success) {
+                            alert('Scanner stopped');
+                            loadDashboardData();
+                        }
+                    })
+                    .catch(err => alert('Error stopping scanner: ' + err));
+            }
+        }
 
-// Global scanner state (update with actual data)
-const scanner_state = {
-    'running': false,
-    'last_scan': null,
-    'next_scan': null,
-    'total_scans': 0,
-    'signals_generated': 0
-};
+        // Utility functions
+        function formatPrice(price) {
+            if (!price) return '0.00';
+            return parseFloat(price).toFixed(2);
+        }
+
+        function formatCurrency(value) {
+            if (!value) return '0.00';
+            return Math.abs(value).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+        }
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', function() {
+            if (dashboardRefreshInterval) {
+                clearInterval(dashboardRefreshInterval);
+            }
+        });

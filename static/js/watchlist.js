@@ -274,16 +274,10 @@ async function refreshWatchlist() {
     showToast('Watchlist refreshed', 'success');
 }
 
-// Helper: Format currency
+// Helper: Format currency with commas
 function formatCurrency(value) {
-    if (value >= 10000000) {
-        return '₹' + (value / 10000000).toFixed(2) + ' Cr';
-    } else if (value >= 100000) {
-        return '₹' + (value / 100000).toFixed(2) + ' L';
-    } else if (value >= 1000) {
-        return '₹' + (value / 1000).toFixed(2) + ' K';
-    }
-    return '₹' + value.toFixed(2);
+    if (value === undefined || value === null || isNaN(value)) return '₹0.00';
+    return '₹' + Math.abs(value).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
 // Helper: Toggle loading spinner

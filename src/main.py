@@ -439,6 +439,15 @@ class NSETrendScanner:
             self.last_scan_time = datetime.now()
             scan_duration = (self.last_scan_time - scan_start).total_seconds()
             logger.info(f"Scan #{self.total_scans} completed in {scan_duration:.2f}s")
+
+            # Sync global scanner state for UI
+            try:
+                from api import scanner_state
+                scanner_state["last_scan"] = datetime.now().isoformat()
+                scanner_state["total_scans"] = self.total_scans
+                scanner_state["signals_generated"] = self.total_signals
+            except Exception as e:
+                logger.debug(f"Could not update scanner_state: {e}")
             
         except Exception as e:
             logger.error(f"Error during scan: {e}", exc_info=True)
@@ -2644,7 +2653,15 @@ Loss: -{loss_pct:.1f}%"""
         
         # Start scheduler
         self.scheduler.start()
-        
+
+        # Update global scanner state for UI
+        try:
+            from api import scanner_state
+            scanner_state["running"] = True
+            scanner_state["last_scan"] = datetime.now().isoformat()
+        except Exception as e:
+            logger.warning(f"Could not update scanner_state: {e}")
+
         logger.info(f"Scheduler started - Continuous monitor: every {scan_interval}min, Signal gen: {self.daily_signal_hour}:00 IST")
         
         # Keep main thread alive
@@ -3072,7 +3089,14 @@ Loss: -{loss_pct:.1f}%"""
     def stop(self):
         """Stop the scanner."""
         self.scheduler.stop()
-        
+
+        # Update global scanner state for UI
+        try:
+            from api import scanner_state
+            scanner_state["running"] = False
+        except Exception as e:
+            logger.warning(f"Could not update scanner_state: {e}")
+
         # Only log shutdown info locally - DO NOT send to Telegram
         # Telegram should ONLY receive trading signals
         logger.info(f"NSE Trend Scanner stopped - Total scans: {self.total_scans}, Total signals: {self.total_signals}")
@@ -3341,10 +3365,11 @@ def main():
         data_fetcher=scanner.data_fetcher,
         indicator_engine=scanner.indicator_engine
     )
-    logger.info("WatchlistManager initialized")
+    logger.info(f"WatchlistManager initialized: {watchlist_manager}, items: {len(watchlist_manager.watchlist)}")
 
     # Initialize Flask API with scanner instances
     try:
+        logger.info("Calling init_flask_api with watchlist_manager...")
         init_flask_api(
             trade_journal_inst=scanner.trade_journal,
             data_fetcher_inst=scanner.data_fetcher,
@@ -3353,9 +3378,16 @@ def main():
             history_manager_inst=scanner.history_manager,
             watchlist_manager_inst=watchlist_manager
         )
+        # Verify that watchlist_manager was actually set in the api module
+        import api
+        logger.info(f"After init: api.watchlist_manager = {api.watchlist_manager}")
+        if api.watchlist_manager is None:
+            raise RuntimeError("watchlist_manager global in api module is still None after init_api call")
         logger.info("Flask API initialized with scanner components")
     except Exception as e:
-        logger.error(f"Failed to initialize API: {e}")
+        logger.exception("Failed to initialize API")  # Logs full traceback
+        # Re-raise to prevent starting broken server
+        raise
 
     # Start Flask API in background thread
     def run_api():
