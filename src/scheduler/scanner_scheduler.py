@@ -42,8 +42,8 @@ class ScannerScheduler:
         # Scan interval for continuous monitoring (default 15 min)
         self.scan_interval_minutes = self.scheduler_config.get('scan_interval_minutes', 15)
         
-        # Run days: Monday=0, Tuesday=1, ..., Friday=4
-        self.run_days = self.scheduler_config.get('run_days', [1, 2, 3, 4, 5])
+        # Run days: Monday=0, Tuesday=1, Wednesday=2, Thursday=3, Friday=4 (NOT Saturday=5, Sunday=6)
+        self.run_days = self.scheduler_config.get('run_days', [0, 1, 2, 3, 4])
         
         # Configure executors
         executors = {
@@ -61,45 +61,84 @@ class ScannerScheduler:
         
     def add_continuous_job(self, func: Callable, job_id: str = 'continuous_monitor') -> None:
         """
-        Add continuous monitoring job - runs every 15 minutes.
+        Add continuous monitoring job - runs every 15 minutes during market hours only.
+        
+        Market hours: 9:15 AM to 3:30 PM IST on weekdays (Mon-Fri)
+        Respects NSE market holidays
+        
         Used for tracking active signals, checking SL/Target hits.
         """
-        trigger = IntervalTrigger(
-            minutes=self.scan_interval_minutes,
+        # Precise hour:minute combinations for market hours 9:15 AM - 3:30 PM
+        # Starting at 9:15, then 9:30, 9:45, 10:00, ... up to 15:30
+        trigger = CronTrigger(
+            hour='9-15',  # 9 AM to 3 PM
+            minute='15,30,45,0',  # Every 15 minutes: :15, :30, :45, :00
+            day_of_week=self.run_days,  # Weekdays only (Mon-Fri: 0-4)
             timezone=self.timezone
         )
         
+        # Wrap function with market check to skip on holidays
+        def market_aware_func():
+            try:
+                from scheduler.market_scheduler import MarketScheduler
+                ms = MarketScheduler()
+                if ms.is_market_open():
+                    return func()
+                else:
+                    logger.debug(f"Skipping {job_id}: Market not open (holiday/weekend)\"")
+                    return None
+            except Exception as e:
+                logger.error(f"Error in market check: {e}")
+                return func()  # Fallback: run anyway
+        
         self.continuous_job = self.scheduler.add_job(
-            func,
+            market_aware_func,
             trigger=trigger,
             id=job_id,
-            name=f'Continuous Monitor (every {self.scan_interval_minutes} min)',
+            name=f'Continuous Monitor (every {self.scan_interval_minutes} min during market hours 9:15-15:30 IST on working days)',
             replace_existing=True
         )
         
-        logger.info(f"Continuous monitoring job scheduled: every {self.scan_interval_minutes} minutes")
+        logger.info(f"Continuous monitoring job scheduled: every {self.scan_interval_minutes} minutes during market hours (9:15-15:30 IST) on weekdays (excludes NSE holidays)")
     
     def add_signal_generation_job(self, func: Callable, job_id: str = 'signal_generator') -> None:
         """
-        Add signal generation job - runs once daily at 3:00 PM IST.
+        Add signal generation job - runs once daily at 3:00 PM IST on working days.
+        Respects NSE market holidays and weekends.
         Generates new trading signals (max 3 per day).
         """
         trigger = CronTrigger(
             hour=self.signal_hour,
             minute=self.signal_minute,
-            day_of_week=self.run_days,
+            day_of_week=self.run_days,  # Mon-Fri only
             timezone=self.timezone
         )
         
+        # Wrap function with market check to skip on holidays
+        def market_aware_signal_func():
+            try:
+                from scheduler.market_scheduler import MarketScheduler
+                ms = MarketScheduler()
+                # Check if today is a working day (not holiday)
+                from datetime import date
+                if ms._is_market_working_day(date.today()):
+                    return func()
+                else:
+                    logger.info(f"Skipping {job_id}: Today is NSE holiday or weekend")
+                    return None
+            except Exception as e:
+                logger.error(f"Error in holiday check: {e}")
+                return func()  # Fallback: run anyway
+        
         self.signal_job = self.scheduler.add_job(
-            func,
+            market_aware_signal_func,
             trigger=trigger,
             id=job_id,
-            name=f'Signal Generator (daily at {self.signal_hour}:{self.signal_minute:02d} IST)',
+            name=f'Signal Generator (daily at {self.signal_hour}:{self.signal_minute:02d} IST on working days)',
             replace_existing=True
         )
         
-        logger.info(f"Signal generation job scheduled: {self.signal_hour}:{self.signal_minute:02d} IST on days {self.run_days}")
+        logger.info(f"Signal generation job scheduled: {self.signal_hour}:{self.signal_minute:02d} IST on working days (Mon-Fri, excludes NSE holidays) - Max {self.max_signals_per_day} signals/day")
     
     def add_job(self, func: Callable, job_id: str = 'scanner_job') -> None:
         """Legacy method - adds signal generation job."""
@@ -125,9 +164,12 @@ class ScannerScheduler:
             'running': self.scheduler.running,
             'next_signal_run': self.signal_job.next_run_time if self.signal_job else None,
             'continuous_interval': f"{self.scan_interval_minutes} min",
-            'signal_time': f'{self.signal_hour}:{self.signal_minute:02d}',
-            'run_days': self.run_days,
-            'max_signals_per_day': self.max_signals_per_day
+            'signal_time': f'{self.signal_hour}:{self.signal_minute:02d} IST',
+            'market_hours': '09:15-15:30 IST',
+            'run_days': 'Mon-Fri (weekdays only)',
+            'excludes': 'NSE market holidays',
+            'max_signals_per_day': self.max_signals_per_day,
+            'timezone': self.timezone
         }
 
 

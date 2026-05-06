@@ -1,20 +1,21 @@
 # NSE Trend Agent - Product Requirements Document
 
-**Version:** 2.0  
-**Date:** 2026-04-05  
-**Project:** NSE Trend Scanner Agent
+**Version:** 3.0  
+**Date:** 2026-04-14  
+**Project:** NSE Trend Scanner Agent (Agentic AI v3.0)
 
 ---
 
 ## 1. Project Overview
 
-**Purpose:** Automated trading scanner for NSE (National Stock Exchange of India) stocks that monitors ~500 stocks during market hours and detects potential uptrend starts.
+**Purpose:** Automated trading scanner for NSE (National Stock Exchange of India) stocks that monitors ~500 stocks during market hours and detects potential uptrend starts. **Now with Agentic AI (v3.0)** - the scanner makes autonomous decisions.
 
 **Technology Stack:**
 - Language: Python
 - Data Source: Yahoo Finance
 - Notifications: Telegram Bot
 - AI: Multi-Provider LLM (OpenAI, Anthropic, Google Gemini, Groq)
+- Agentic AI: Autonomous decision-making with LLM-powered market analysis
 
 ---
 
@@ -110,7 +111,70 @@
 | /help command | ✅ | Help message |
 | Two-way communication | ✅ | Interactive bot |
 
-### 2.7 Learning & Feedback System
+### 2.7 Agentic AI (v3.0) - Autonomous Agent
+
+| Feature | Status | Implementation |
+|---------|--------|----------------|
+| Agent Controller | ✅ | src/agent_controller.py |
+| LLM-powered decision making | ✅ | Uses LLM to analyze and decide actions |
+| Market regime detection | ✅ | BULLISH/BEARISH/SIDEWAYS/VOLATILE classification |
+| Dynamic action selection | ✅ | SCAN/WAIT/ADJUST/MONITOR/ANALYZE |
+| Self-correction | ✅ | Win/loss streak tracking and approach adjustment |
+| Natural language explanations | ✅ | Reasoning provided for every decision |
+| Agent state management | ✅ | data/agent_state.json |
+| Fallback behavior | ✅ | Rule-based when LLM unavailable |
+
+### 2.10 Swing Trade Scanner (PRD 2)
+
+| Feature | Status | Implementation |
+|---------|--------|----------------|
+| Focus: Clean trends | ✅ | src/swing_trade_scanner.py |
+| Focus: Swing trades | ✅ | SwingTradeScanner class |
+| Timeframes: Trend → Daily | ✅ | 1D for trend identification |
+| Timeframes: Entry → 1H | ✅ | 1H for entry timing |
+| EMA 50/200 alignment | ✅ | check_ema_50_200_alignment |
+| Volume delivery spike | ✅ | check_volume_spike (>1.5x) |
+| Structure (HH/HL) | ✅ | detect_structure_1h |
+| Sector strength | ✅ | sector_data parameter |
+| NIFTY alignment | ✅ | check_nifty_alignment |
+| Delivery % | ✅ | get_delivery_percent |
+| Trend continuation | ✅ | Strategy type detection |
+| Breakout after consolidation | ✅ | check_breakout_consolidation |
+| Avoid: Low volume | ✅ | MIN_VOLUME_RATIO filter |
+| Avoid: News spikes | ✅ | Volume pattern check |
+
+### 2.11 Options Scanner (PRD 3)
+
+| Feature | Status | Implementation |
+|---------|--------|----------------|
+| Focus: Volatility + timing | ✅ | src/options_scanner.py |
+| Timeframes: Trend → Daily | ✅ | 1D for underlying direction |
+| Timeframes: Entry → 15m/5m | ✅ | 15m for entry timing |
+| Underlying stock gives signal | ✅ | underlying_signal check |
+| IV expansion starting | ✅ | check_iv_expansion |
+| OI confirms direction | ✅ | get_oi_data + oi_direction |
+| IV percentile | ✅ | get_iv_data |
+| OI change | ✅ | oi_change_pct tracking |
+| PCR (Put Call Ratio) | ✅ | get_pcr |
+| ATR expansion | ✅ | check_atr_expansion |
+| Breakout + Call buy | ✅ | BREAKOUT_CALL strategy |
+| Breakdown + Put buy | ✅ | BREAKDOWN_PUT strategy |
+| High IV → option selling | ✅ | HIGH_IV_SELL strategy |
+| Strict SL (options decay fast) | ✅ | MAX_STOP_LOSS_PCT = 30% |
+
+---
+
+## 3. Agent Actions
+
+| Action | Description | When Used |
+|--------|-------------|------------|
+| SCAN | Execute normal signal scan | Default, favorable conditions |
+| WAIT | Skip this scan cycle | Unfavorable market conditions |
+| ADJUST_STRATEGY | Change strategy focus | Current strategy underperforming |
+| MONITOR | Focus on existing positions | High market risk |
+| ANALYZE | Deep dive on specific stocks | On demand |
+
+### 2.8 Learning & Feedback System
 
 | Feature | Status | Implementation |
 |---------|--------|----------------|
@@ -245,6 +309,7 @@ nse-trend-agent/
 ├── src/
 │   ├── __init__.py
 │   ├── main.py               # Entry point
+│   ├── agent_controller.py  # Agentic AI (v3.0) - autonomous decision maker
 │   ├── data_fetcher.py       # Yahoo Finance data
 │   ├── indicator_engine.py   # Technical indicators
 │   ├── trend_detector.py     # Trend strategy
@@ -320,5 +385,5 @@ groq>=0.4.0
 
 ---
 
-**Document Version:** 2.0  
-**Last Updated:** 2026-04-05
+**Document Version:** 3.0  
+**Last Updated:** 2026-04-14

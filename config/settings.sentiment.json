@@ -1,0 +1,49 @@
+{
+  "telegram": {
+    "bot_token": "${TELEGRAM_BOT_TOKEN}",
+    "chat_id": "${TELEGRAM_CHAT_ID}",
+    "channel_chat_id": "${TELEGRAM_CHANNEL_ID}"
+  },
+  "scanner": {
+    "max_stocks": 100,
+    "update_interval_minutes": 15,
+    "max_signals_per_strategy": 3,
+    "signal_mode": {
+      "daily_signal_hour": 15,
+      "max_signals_per_day": 5,
+      "confidence_threshold": 7
+    },
+    "enable_mtf_strategy": true,
+    "enable_sentiment_analysis": true,
+    "enable_market_sentiment_alerts": true,
+    "max_sentiment_signals_per_scan": 3,
+    "sentiment_min_confidence": 0.60,
+    "comment": "Sentiment analysis settings:\n  - enable_sentiment_analysis: Turn on AI sentiment-driven scanning\n  - enable_market_sentiment_alerts: Alert when market sentiment changes (BULLISH/BEARISH)\n  - max_sentiment_signals_per_scan: Max breakout alerts every 15 minutes\n  - sentiment_min_confidence: Minimum AI confidence (0.5=50% for more alerts, 0.8=80% for strict)"
+  },
+  "trading": {
+    "position_sizing": "fixed",
+    "position_size": 1,
+    "max_positions": 3,
+    "risk_per_trade_percent": 2.0
+  },
+  "signal_validation": {
+    "min_score": 6.0,
+    "use_ai_validation": true,
+    "require_volume_confirmation": true,
+    "require_pattern_validation": true
+  },
+  "risk_management": {
+    "max_drawdown_percent": 10,
+    "stop_loss_percent": 2.5,
+    "profit_target_percent": 7.5
+  },
+  "learning": {
+    "enable_learning": true,
+    "learning_data_dir": "data",
+    "signal_tracking": {
+      "enable_tracking": true,
+      "check_interval_scans": 4,
+      "track_outcomes": true
+    }
+  }
+}

@@ -1,32 +1,44 @@
 # NSE Trend Agent - Reasoning & Learning Module
 ## Product Requirements Document (PRD)
 
-**Version:** 1.0  
-**Date:** 2026-03-23  
+**Version:** 3.0  
+**Date:** 2026-04-14  
 **Author:** Product Team  
-**Status:** Draft for Review  
+**Status:** Production - Agentic AI v3.0  
 
 ---
 
 ## 1. Executive Summary
 
-This document outlines the Product Requirements for adding two major capabilities to the existing NSE Trend Agent application:
+This document outlines the Product Requirements for the **NSE Trend Agent v3.0** with **Agentic AI** capabilities:
 
-1. **Enhanced Reasoning Engine** - A hybrid system combining rule-based algorithms, weighted scoring, and AI-driven reasoning to generate more accurate and nuanced trading signals.
+1. **Agentic AI Controller** - An autonomous agent that uses LLM to decide when to SCAN, WAIT, or ADJUST strategy based on market conditions.
 
-2. **Learning & Feedback System** - A closed-loop learning mechanism that tracks signal outcomes, measures accuracy, and continuously improves signal quality through historical performance analysis.
+2. **Enhanced Reasoning Engine** - A hybrid system combining rule-based algorithms, weighted scoring, and AI-driven reasoning to generate more accurate and nuanced trading signals.
+
+3. **Learning & Feedback System** - A closed-loop learning mechanism that tracks signal outcomes, measures accuracy, and continuously improves signal quality through historical performance analysis.
 
 ### 1.1 Problem Statement
 
-The current NSE Trend Agent generates trading signals using:
-- Rule-based algorithms (VERC, Trend Detection)
+The NSE Trend Agent (v2.x) generates trading signals using:
+- Rule-based algorithms (VERC, Trend Detection, MTF)
 - AI/LLM-based analysis
+- Market context detection
 
-However, these signals lack:
-- A unified scoring mechanism to rank signal strength
-- Historical tracking of signal accuracy
-- Feedback-based improvement
-- Contextual weighting based on market conditions
+However, it lacks:
+- **Autonomous decision-making** - Scanner runs on fixed schedule regardless of conditions
+- **Market-aware action selection** - No ability to skip unfavorable scans
+- **Strategy adaptation** - No automatic strategy adjustment based on performance
+
+### 1.2 Proposed Solution (v3.0)
+
+Implement an **Agentic AI Controller** that:
+
+- **Uses LLM to analyze market conditions** in real-time
+- **Decides actions autonomously**: SCAN/WAIT/ADJUST/MONITOR/ANALYZE
+- **Classifies market regime**: BULLISH/BEARISH/SIDEWAYS/VOLATILE
+- **Self-corrects** based on win/loss streaks
+- **Provides natural language explanations** for every decision
 
 ### 1.2 Proposed Solution
 
@@ -661,12 +673,75 @@ nse-trend-agent/
 │   └── ...
 ├── docs/
 │   └── PRD-Reasoning-Learning.md (this file)
-└── tests/
-    ├── test_reasoning.py (new)
-    └── test_learning.py (new)
+│   └── tests/
+│       ├── test_reasoning.py (new)
+│       └── test_learning.py (new)
 ```
 
 ---
 
-**Document Version:** 1.0  
-**Next Steps:** Review and approve PRD, then proceed to implementation planning
+## 11. v3.0 Agentic AI Implementation
+
+### 11.1 Agent Controller Architecture
+
+The Agentic AI is implemented in `src/agent_controller.py` with the following components:
+
+| Component | Description |
+|-----------|-------------|
+| `AgentController` | Main class handling all agent logic |
+| `AgentAction` | Enum: SCAN, WAIT, ADJUST_STRATEGY, MONITOR, ANALYZE, SEND_ALERT |
+| `MarketRegime` | Enum: BULLISH, BEARISH, SIDEWAYS, VOLATILE, UNKNOWN |
+| `AgentDecision` | Dataclass for LLM decision output |
+| `AgentExplanation` | Natural language explanation wrapper |
+
+### 11.2 Agent Decision Flow
+
+```
+1. Fetch Market Data
+   └─ NIFTY 50, sectors, active signals, trade outcomes
+
+2. LLM Analysis (analyze_and_decide)
+   ├─ System prompt: Expert trading agent instructions
+   ├─ Context: Market data, active trades, outcomes
+   └─ Output: JSON decision
+
+3. Execute Action
+   ├─ SCAN: Run signal detection
+   ├─ WAIT: Log skip, continue next cycle
+   ├─ ADJUST: Modify strategy focus
+   └─ MONITOR: Check active positions
+
+4. Self-Correction (self_correct)
+   └─ Track outcomes, adjust approach based on streaks
+```
+
+### 11.3 Agent State
+
+Maintained in `data/agent_state.json`:
+```json
+{
+  version: 3.0,
+  last_decision: {...},
+  market_regime: BULLISH,
+  decision_history: [...],
+  feedback_history: [...],
+  streak: { wins: 3, losses: 1 }
+}
+```
+
+### 11.4 Fallback Behavior
+
+When LLM unavailable, agent uses rule-based fallback:
+
+| Regime | Action | Strategy Focus |
+|--------|--------|----------------|
+| BULLISH | SCAN | TREND, MTF |
+| BEARISH | WAIT | None |
+| SIDEWAYS | SCAN | VERC, MTF |
+| VOLATILE | WAIT | None |
+
+---
+
+**Document Version:** 3.0  
+**Last Updated:** 2026-04-14  
+**Status:** Production - Agentic AI v3.0 deployed

@@ -9,7 +9,7 @@ import argparse
 import logging
 import threading
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, time as dt_time
 from typing import Dict, Any, List, Optional
 import pandas as pd
 import pytz
@@ -20,62 +20,88 @@ logger = logging.getLogger(__name__)
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from data_fetcher import DataFetcher
-from indicator_engine import IndicatorEngine
-from trend_detector import TrendDetector
-from alert_service import AlertService, TelegramBotHandler
-from market_scheduler import MarketScheduler
-from volume_compression import scan_stocks as verc_scan_stocks
-from ai_stock_analyzer import create_analyzer
+from core.data_fetcher import DataFetcher
+from core.indicator_engine import IndicatorEngine
+from core.trend_detector import TrendDetector
+from notifications.alert_service import AlertService, TelegramBotHandler, MockAlertService
+from scheduler.market_scheduler import MarketScheduler
+from strategies.volume_compression import scan_stocks as verc_scan_stocks
+from ai.ai_stock_analyzer import create_analyzer
 
 # New modules for Reasoning + Learning
-from reasoning_engine import create_reasoning_engine
-from history_manager import create_history_manager
-from signal_tracker import create_signal_tracker
-from performance_tracker import create_performance_tracker
-from notification_manager import create_notification_manager
+from ai.reasoning_engine import create_reasoning_engine
+from core.history_manager import create_history_manager
+from trade.signal_tracker import create_signal_tracker
+from trade.performance_tracker import create_performance_tracker
+from notifications.notification_manager import create_notification_manager
 
 # New modules for Memory and AI-driven rules
-from signal_memory import create_signal_memory
-from ai_rules_engine import create_ai_rules_engine
+from ai.signal_memory import create_signal_memory
+from ai.ai_rules_engine import create_ai_rules_engine
 
 # New MTF Strategy Module
-from mtf_strategy import MTFStrategyScanner, format_mtf_signal_alert, create_mtf_scanner
+from strategies.mtf_strategy import MTFStrategyScanner, format_mtf_signal_alert, create_mtf_scanner
+
+# New Swing Trade Scanner
+from strategies.swing_trade_scanner import SwingTradeScanner, format_swing_signal_alert, create_swing_scanner
+
+# New Options Scanner
+from strategies.options_scanner import OptionsScanner, format_options_signal_alert, create_options_scanner
+
+# NEW: Market Sentiment Analysis & AI-Driven Scanning
+from market.market_sentiment_analyzer import create_market_sentiment_analyzer
+from strategies.sentiment_driven_scanner import create_sentiment_driven_scanner
+
+# Enhanced Signal Validation
+from trade.signal_validator_enhanced import create_enhanced_validator
 
 # Trade Journal & Strategy Performance
-from trade_journal import create_trade_journal
-from strategy_optimizer import create_strategy_performance_tracker
-from ai_learning_layer import create_ai_learning_layer
+from trade.trade_journal import create_trade_journal
+from trade.strategy_optimizer import create_strategy_performance_tracker
+from ai.ai_learning_layer import create_ai_learning_layer
 
 # New: Factor Analyzer & Market Context
-from factor_analyzer import create_factor_analyzer
-from market_context import create_market_context_engine
+from market.factor_analyzer import create_factor_analyzer
+from market.market_context import create_market_context_engine
 
 # Trade Validator
-from trade_validator import create_trade_validator
+from trade.trade_validator import create_trade_validator
 
 # Consolidation Detector
-from consolidation_detector import is_tight_consolidation, is_valid_breakout, is_strong_breakout
+from core.consolidation_detector import is_tight_consolidation, is_valid_breakout, is_strong_breakout
+
+# Agent Controller - Makes scanner Agentic AI
+from ai.agent_controller import create_agent_controller, AgentAction
+
+# Watchlist Manager
+from watchlist.watchlist_manager import WatchlistManager
+
+# Flask API integration
+from api import init_api as init_flask_api, app as flask_app
 
 
 def setup_logging(log_level='INFO', log_file='logs/scanner.log'):
-    """Setup logging configuration."""
-    # Create logs directory if it doesn't exist using Path
-    log_path = Path(log_file)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    """Setup logging configuration. In Railway, only use stdout."""
+    # Check if running on Railway (ephemeral filesystem)
+    is_railway = os.environ.get('RAILWAY_ENVIRONMENT_ID') is not None
+    
+    handlers: List[Any] = [logging.StreamHandler()]
+    
+    # Only create file handler if not on Railway
+    if not is_railway:
+        log_path = Path(log_file)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(log_file))
     
     # Configure root logger
     logging.basicConfig(
         level=getattr(logging, log_level),
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler()
-        ]
+        handlers=handlers
     )
     
     # Suppress verbose libraries
-    logging.getLogger('yfinance').setLevel(logging.WARNING)
+    logging.getLogger('yfinance').setLevel(logging.CRITICAL)
     logging.getLogger('pandas').setLevel(logging.WARNING)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
 
@@ -103,12 +129,16 @@ class NSETrendScanner:
         
         # Initialize alert service
         if use_mock_alerts:
-            from alert_service import MockAlertService
             self.alert_service = MockAlertService()
         else:
             # Prefer channel chat ID over personal chat ID
             target_chat_id = telegram_channel_chat_id or telegram_chat_id
-            self.alert_service = AlertService(telegram_token, target_chat_id, telegram_channel_chat_id)
+            # Validate telegram configuration
+            if telegram_token and target_chat_id:
+                self.alert_service = AlertService(telegram_token, target_chat_id, telegram_channel_chat_id or '')
+            else:
+                logger.warning("Telegram configuration incomplete (missing token or chat ID), alerts disabled")
+                self.alert_service = MockAlertService()
         
         # Initialize AI analyzer
         self.ai_analyzer = create_analyzer()
@@ -185,30 +215,50 @@ class NSETrendScanner:
         self.mtf_scanner = create_mtf_scanner()
         self.mtf_scanner.set_data_fetcher(self.data_fetcher)
         
-        # ==================== Trade Journal & Performance ====================
-        self.strategy_optimizer = create_strategy_performance_tracker(self.trade_journal)
-        
-        self.ai_learning_layer = create_ai_learning_layer(
-            self.trade_journal, 
-            self.strategy_optimizer,
-            self.ai_analyzer
-        )
-        
         # ==================== NEW: Factor Analyzer ====================
         self.factor_analyzer = create_factor_analyzer(self.trade_journal)
         
         # ==================== NEW: Market Context Engine ====================
         self.market_context_engine = create_market_context_engine(self.data_fetcher)
         
+        # ==================== NEW: Market Sentiment Analysis & AI-Driven Scanning ====================
+        self.sentiment_analyzer = create_market_sentiment_analyzer(
+            data_fetcher=self.data_fetcher,
+            ai_analyzer=self.ai_analyzer
+        )
+        
+        self.sentiment_driven_scanner = create_sentiment_driven_scanner(
+            data_fetcher=self.data_fetcher,
+            sentiment_analyzer=self.sentiment_analyzer,
+            ai_analyzer=self.ai_analyzer
+        )
+        
+        logger.info("Market Sentiment Analyzer and Sentiment-Driven Scanner initialized")
+        
         # ==================== Trade Validator ====================
         self.trade_validator = create_trade_validator(self.settings)
+        
+        # ==================== Enhanced Signal Validator ====================
+        # Validates signals before sending: score, technical patterns, AI approval, SL checks
+        min_signal_score = self.settings.get('signal_validation', {}).get('min_score', 6.0)
+        self.signal_validator = create_enhanced_validator(min_signal_score, self.ai_analyzer)
+        logger.info(f"Initialized Enhanced Signal Validator with min score: {min_signal_score}")
+        
+        # ==================== Agent Controller (Agentic AI) ====================
+        self.agent_controller = create_agent_controller(
+            ai_analyzer=self.ai_analyzer,
+            market_context_engine=self.market_context_engine,
+            strategy_optimizer=self.strategy_optimizer,
+            trade_journal=self.trade_journal
+        )
         
         # ==================== Signal Mode Configuration ====================
         signal_mode = self.settings.get('signal_mode', {})
         self.daily_signal_hour = signal_mode.get('daily_signal_hour', 15)
-        self.max_signals_per_day = signal_mode.get('max_signals_per_day', 5)
-        self.confidence_threshold = signal_mode.get('confidence_threshold', 7)
+        self.max_signals_per_day = signal_mode.get('max_signals_per_day', 10)
+        self.confidence_threshold = signal_mode.get('confidence_threshold', 5)
         self.deduplication_days = signal_mode.get('deduplication_days', 5)
+        self.alert_hours = signal_mode.get('alert_hours', [11, 15])  # New: multiple alert times
         self._signals_sent_today = 0
         self._last_signal_date = None
         
@@ -230,8 +280,18 @@ class NSETrendScanner:
         warnings.filterwarnings('ignore')
     
     def _load_config(self):
-        """Load stock configuration from JSON file."""
+        """Load stock configuration from JSON file or environment variable."""
         import json
+        
+        # First, try environment variable (Railway uses this)
+        env_stocks = os.environ.get('STOCKS_LIST')
+        if env_stocks:
+            try:
+                self.stocks = json.loads(env_stocks)
+                logger.info(f"Loaded {len(self.stocks)} stocks from STOCKS_LIST environment variable")
+                return
+            except json.JSONDecodeError:
+                logger.warning("Invalid JSON in STOCKS_LIST environment variable")
         
         config_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -244,25 +304,34 @@ class NSETrendScanner:
                 'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK',
                 'SBIN', 'BHARTIARTL', 'LT', 'BAJFINANCE', 'HINDUNILVR'
             ]
+            logger.info(f"Config file not found at {config_path}, using default Nifty 50 stocks")
             return
         
-        with open(config_path, 'r') as f:
-            config = json.load(f)
-        
-        # Config can be a list of stocks or a dict with 'stocks' key
-        if isinstance(config, list):
-            self.stocks = config
-        else:
-            # Get stock list from config
-            self.stocks = config.get('stocks', [])
+        try:
+            with open(config_path, 'r') as f:
+                config = json.load(f)
             
-            # Also check for groups
-            if 'groups' in config:
-                for group in config['groups'].values():
-                    self.stocks.extend(group)
-        
-        # Remove duplicates
-        self.stocks = list(set(self.stocks))
+            # Config can be a list of stocks or a dict with 'stocks' key
+            if isinstance(config, list):
+                self.stocks = config
+            else:
+                # Get stock list from config
+                self.stocks = config.get('stocks', [])
+                
+                # Also check for groups
+                if 'groups' in config:
+                    for group in config['groups'].values():
+                        self.stocks.extend(group)
+            
+            # Remove duplicates
+            self.stocks = list(set(self.stocks))
+            logger.info(f"Loaded {len(self.stocks)} stocks from {config_path}")
+        except Exception as e:
+            logger.error(f"Error loading config from {config_path}: {e}. Using defaults.")
+            self.stocks = [
+                'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK',
+                'SBIN', 'BHARTIARTL', 'LT', 'BAJFINANCE', 'HINDUNILVR'
+            ]
     
     def _load_settings(self):
         """Load settings from JSON file."""
@@ -280,13 +349,18 @@ class NSETrendScanner:
                 logger.info("Settings loaded from config/settings.json")
                 
                 token = self.settings.get('telegram', {}).get('bot_token', '')
-                if token:
-                    env_token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
-                    if token != env_token:
-                        logger.warning(
-                            "Telegram token found in settings.json — "
-                            "prefer using TELEGRAM_BOT_TOKEN env var to avoid credential leak"
-                        )
+                env_token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+                
+                if token and not env_token:
+                    logger.warning(
+                        "Telegram token found in settings.json — "
+                        "prefer using TELEGRAM_BOT_TOKEN env var to avoid credential leak"
+                    )
+                
+                if token and env_token:
+                    self.settings['telegram']['bot_token'] = env_token
+                    logger.info("Using TELEGRAM_BOT_TOKEN from environment")
+                    
             except Exception as e:
                 logger.error(f"Error loading settings: {e}")
                 self.settings = {}
@@ -304,6 +378,7 @@ class NSETrendScanner:
         Main scan method that runs on schedule.
         
         Steps:
+        0. Agent decides action (scan, wait, adjust)
         1. Fetch stock data (single and multi-timeframe)
         2. Run Trend Detection and VERC strategies
         3. Run MTF Strategy (NEW)
@@ -315,7 +390,28 @@ class NSETrendScanner:
         scan_start = datetime.now()
         
         try:
-            # Step 0: Detect market context
+            # Step 0: Agent makes decision (Agentic AI)
+            active_trades = self.trade_journal.get_active_trades()
+            market_data = {
+                'nifty': {'price': 0, 'change_pct': 0},
+                'sectors': {}
+            }
+            
+            agent_decision = self.agent_controller.analyze_and_decide(
+                market_data=market_data,
+                active_signals=active_trades
+            )
+            
+            if agent_decision.action == AgentAction.WAIT:
+                logger.info(f"Agent decided to WAIT: {agent_decision.reasoning}")
+                return
+            elif agent_decision.action == AgentAction.ADJUST_STRATEGY:
+                logger.info(f"Agent adjusting strategy: {agent_decision.reasoning}")
+                self.strategy = agent_decision.recommended_strategies[0] if agent_decision.recommended_strategies else 'all'
+            
+            logger.info(f"Agent decision: {agent_decision.action.value} ({agent_decision.confidence}/10) - {agent_decision.reasoning}")
+            
+            # Step 1: Detect market context
             market_context = self.market_context_engine.detect_context()
             logger.debug(f"Market context: {market_context}")
             
@@ -331,6 +427,10 @@ class NSETrendScanner:
             # Step 3: Run NEW MTF Strategy
             self._run_mtf_strategy()
             
+            # Step 3.5: NEW - Run Sentiment-Driven Scanner
+            # Identifies stocks running up in bullish markets with AI validation
+            self._run_sentiment_driven_scan()
+            
             # Step 4: Check active signals periodically
             if self.scan_count % self.signal_check_interval == 0:
                 self._check_active_signals()
@@ -338,28 +438,49 @@ class NSETrendScanner:
             # Update statistics
             self.last_scan_time = datetime.now()
             scan_duration = (self.last_scan_time - scan_start).total_seconds()
+            logger.info(f"Scan #{self.total_scans} completed in {scan_duration:.2f}s")
+
+            # Sync global scanner state for UI
+            try:
+                from api import scanner_state
+                scanner_state["last_scan"] = datetime.now().isoformat()
+                scanner_state["total_scans"] = self.total_scans
+                scanner_state["signals_generated"] = self.total_signals
+            except Exception as e:
+                logger.debug(f"Could not update scanner_state: {e}")
             
         except Exception as e:
-            # Silently handle errors to keep scanner running
-            pass
+            logger.error(f"Error during scan: {e}", exc_info=True)
     
     def run_cycle(self):
         """
         Main cycle that runs every 15 minutes.
-        - ALWAYS RUN: Monitor active trades
+        - ONLY RUN DURING MARKET HOURS: Monitor active trades
         - ONLY RUN AT 3:00 PM: Signal generation
         """
         from datetime import datetime
         
         ist = pytz.timezone('Asia/Kolkata')
-        current_time = datetime.now(ist)
+        now = datetime.now(ist)
         
-        # ALWAYS RUN: Monitor active trades
+        # Skip weekends
+        if now.weekday() >= 5:
+            logger.debug("Weekend - skipping run_cycle")
+            return
+        
+        # Skip outside market hours
+        current_time = now.time()
+        market_open = dt_time(9, 15)
+        market_close = dt_time(15, 30)
+        
+        if not (market_open <= current_time <= market_close):
+            logger.debug("Outside market hours - skipping run_cycle")
+            return
+        
+        # ONLY DURING MARKET HOURS: Monitor active trades
         self.monitor_active_trades()
         
-        # ONLY RUN AT 3:00 PM
-        if current_time.hour == 15 and current_time.minute == 0:
-            self.run_signal_generation()
+        # Signal generation now handled by separate scheduled jobs at configured alert_hours
     
     def monitor_active_trades(self):
         """
@@ -435,7 +556,7 @@ class NSETrendScanner:
     def _get_current_price(self, symbol: str) -> Optional[float]:
         """Get current price for a stock."""
         try:
-            stock_data = self.data_fetcher.fetch_stock_data(f"{symbol}.NS", interval='1d', days=2)
+            stock_data = self.data_fetcher.fetch_stock_data(symbol, interval='1d', days=2)
             if stock_data is not None and len(stock_data) > 0:
                 return float(stock_data.iloc[-1].get('close', 0))
             return None
@@ -496,6 +617,9 @@ Loss: -{loss_pct:.1f}%
         
         self.strategy_optimizer.evaluate()
         
+        # Agentic self-correction
+        self.agent_controller.self_correct(outcome, trade)
+        
         logger.info(f"Trade closed: {trade_id} - {outcome}")
     
     def run_continuous_monitoring(self):
@@ -504,6 +628,21 @@ Loss: -{loss_pct:.1f}%
         Monitors active signals, checks for SL/Target hits.
         Does NOT generate new signals - only tracks existing ones.
         """
+        ist = pytz.timezone('Asia/Kolkata')
+        now = datetime.now(ist)
+        
+        if now.weekday() >= 5:
+            logger.info("Weekend - skipping continuous monitoring")
+            return
+        
+        current_time = now.time()
+        market_open = dt_time(9, 15)
+        market_close = dt_time(15, 30)
+        
+        if not (market_open <= current_time <= market_close):
+            logger.debug("Outside market hours - skipping continuous monitoring")
+            return
+        
         try:
             self.monitor_active_trades()
         except Exception as e:
@@ -514,12 +653,23 @@ Loss: -{loss_pct:.1f}%
         SIGNAL GENERATION MODE - 3:00 PM only
         Sends signals from top 5 candidates found throughout the day.
         If no candidates, runs fresh scan and sends top signals.
+        
+        NEW: Refreshes adaptive filters from learning layer before generating signals.
         """
         from datetime import datetime
         
         ist = pytz.timezone('Asia/Kolkata')
         now = datetime.now(ist)
         today = now.date()
+        
+        # ==================== NEW: Refresh Learning Filters ====================
+        # Before generating signals, refresh adaptive filters from AI learning layer
+        if self.ai_learning_layer and self.ai_rules_engine:
+            try:
+                self.ai_rules_engine._load_adaptive_filters()
+                logger.info("🧠 Refreshed adaptive filters from AI learning layer before signal generation")
+            except Exception as e:
+                logger.warning(f"Could not refresh learning filters: {e}")
         
         # Skip on weekends
         if now.weekday() >= 5:
@@ -535,7 +685,19 @@ Loss: -{loss_pct:.1f}%
         logger.info(f"Top 5 candidates from periodic scans: {len(self._top5_candidates)}")
         
         signals_to_send = []
-        
+        skipped_candidates = []
+        sent_this_run = set()  # Track tickers sent in this run to avoid duplicate updates
+
+        # Fetch fresh market data for all stocks (needed for signal sending and updates)
+        try:
+            stocks_data = self.data_fetcher.fetch_multiple_stocks(self.stocks)
+            if not stocks_data:
+                logger.warning("No stock data fetched during signal generation")
+                return
+        except Exception as e:
+            logger.error(f"Error fetching stock data: {e}")
+            return
+
         if self._top5_candidates:
             logger.info("Using signals from top 5 candidates pool")
             for signal in self._top5_candidates:
@@ -546,36 +708,52 @@ Loss: -{loss_pct:.1f}%
                 
                 if self.trade_journal.check_signal_exists(ticker, signal.strategy_type):
                     logger.info(f"Skipping {ticker}: already exists in trade journal")
+                    skipped_candidates.append({
+                        'ticker': ticker,
+                        'reason': 'Already exists in trade journal'
+                    })
                     continue
                 
                 if self.signal_memory.is_duplicate(ticker):
                     logger.info(f"Skipping {ticker}: recent signal in memory")
+                    skipped_candidates.append({
+                        'ticker': ticker,
+                        'reason': 'Recent duplicate signal in memory'
+                    })
                     continue
                 
                 confidence = getattr(signal, 'final_score', 0)
                 if confidence < self.confidence_threshold:
                     logger.info(f"Skipping {ticker}: confidence {confidence} < threshold {self.confidence_threshold}")
+                    skipped_candidates.append({
+                        'ticker': ticker,
+                        'reason': f'Confidence {confidence:.1f} < threshold {self.confidence_threshold}'
+                    })
                     continue
                 
                 signals_to_send.append(signal)
                 self._signals_sent_today += 1
+                sent_this_run.add(ticker)
         else:
             logger.info("No candidates in pool, running fresh scan")
             try:
-                stocks_data = self.data_fetcher.fetch_multiple_stocks(self.stocks)
                 if not stocks_data:
-                    self._send_no_signals_message()
+                    self._send_no_signals_message(skipped_candidates)
                     return
-                
+
                 all_signals = []
                 
-                from trade_journal import TradeJournal
+                from trade.trade_journal import TradeJournal
                 
                 if self.strategy in ['trend', 'all']:
                     trend_signals = self._get_trend_signals(stocks_data)
                     for signal in trend_signals:
                         signal.strategy_type = 'TREND'
                         signal.strategy_score = signal.trend_score if hasattr(signal, 'trend_score') else 0
+                        
+                        if signal.strategy_score < 6:
+                            continue
+                        
                         signal.volume_ratio = signal.indicators.get('volume_ratio', 0)
                         signal.breakout_strength = self._calculate_breakout_strength(signal.indicators)
                         
@@ -650,33 +828,73 @@ Loss: -{loss_pct:.1f}%
                     ticker = signal.ticker if hasattr(signal, 'ticker') else signal.stock_symbol
                     
                     if self.trade_journal.check_signal_exists(ticker, signal.strategy_type):
+                        skipped_candidates.append({
+                            'ticker': ticker,
+                            'reason': 'Already exists in trade journal'
+                        })
                         continue
                     
                     if self.signal_memory.is_duplicate(ticker):
+                        skipped_candidates.append({
+                            'ticker': ticker,
+                            'reason': 'Recent duplicate signal in memory'
+                        })
                         continue
                     
                     confidence = getattr(signal, 'final_score', 0)
                     if confidence < self.confidence_threshold:
+                        skipped_candidates.append({
+                            'ticker': ticker,
+                            'reason': f'Confidence {confidence:.1f} < threshold {self.confidence_threshold}'
+                        })
                         continue
                     
+                    # ==================== NEW: ENHANCED VALIDATION ====================
+                    # Validate technical patterns, AI approval, and stop loss
+                    df = stocks_data.get(ticker)
+                    is_valid, validation_reason = self.signal_validator.validate_signal_before_sending(
+                        signal,
+                        df=df,
+                        use_ai=True
+                    )
+                    
+                    if not is_valid:
+                        logger.info(f"Signal {ticker} rejected: {validation_reason}")
+                        skipped_candidates.append({
+                            'ticker': ticker,
+                            'reason': validation_reason
+                        })
+                        continue
+                    
+                    logger.info(f"Signal {ticker} passed enhanced validation: {validation_reason}")
                     signals_to_send.append(signal)
                     self._signals_sent_today += 1
+                    sent_this_run.add(ticker)
                     
             except Exception as e:
                 logger.error(f"Error in signal generation fresh scan: {e}")
         
         if not signals_to_send:
-            self._send_no_signals_message()
-            return
+            self._send_no_signals_message(skipped_candidates)
+        else:
+            target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
+
+            # Build df mapping for signals we are about to send
+            signal_dfs = {}
+            for signal in signals_to_send:
+                ticker = signal.ticker if hasattr(signal, 'ticker') else signal.stock_symbol
+                signal_dfs[signal] = stocks_data.get(ticker)
+
+            for signal in signals_to_send:
+                df = signal_dfs.get(signal)
+                self._send_new_signal_alert(signal, target_method, df)
         
-        target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
-        
-        for signal in signals_to_send:
-            self._send_new_signal_alert(signal, target_method)
-        
-        # Clear candidates after sending
-        self._top5_candidates = []
-        
+        # At 3 PM, send updates for open trades that are in current top5 and clear candidates
+        if now.hour == 15:
+            self._send_top5_updates(stocks_data, sent_this_run)
+            # Clear candidates after 3PM processing
+            self._top5_candidates = []
+
         logger.info(f"Signal generation complete - Sent {len(signals_to_send)} signals")
     
     def _calculate_final_score(self, signal) -> float:
@@ -696,7 +914,7 @@ Loss: -{loss_pct:.1f}%
         
         return round(base_score + quality_score, 2)
     
-    def _send_new_signal_alert(self, signal, target_method):
+    def _send_new_signal_alert(self, signal, target_method, df=None):
         """Send new signal alert in required format."""
         ticker = signal.ticker if hasattr(signal, 'ticker') else signal.stock_symbol
         strategy = signal.strategy_type
@@ -704,24 +922,40 @@ Loss: -{loss_pct:.1f}%
         if strategy == 'TREND':
             indicators = signal.indicators
             entry = indicators.get('close', 0)
-            ema50 = indicators.get('ema50', 0)
-            atr = indicators.get('atr', 0)
             
-            stop_loss = min(ema50, entry * 0.98) if ema50 > 0 else entry * 0.98
-            if atr > 0:
-                stop_loss = min(stop_loss, entry - (2 * atr))
+            chart_levels = self._calculate_targets_from_chart(df, entry, 'BUY') if df is not None else None
             
-            risk = entry - stop_loss
-            t1 = entry + (risk * 2)
-            t2 = entry + (risk * 3)
+            if chart_levels and chart_levels[0]:
+                stop_loss = chart_levels[0]
+                t1 = chart_levels[1]
+                t2 = chart_levels[2]
+            else:
+                ema50 = indicators.get('ema50', 0)
+                atr = indicators.get('atr', 0)
+                
+                stop_loss = min(ema50, entry * 0.98) if ema50 > 0 else entry * 0.98
+                if atr > 0:
+                    stop_loss = min(stop_loss, entry - (2 * atr))
+                
+                risk = entry - stop_loss
+                t1 = entry + (risk * 2)
+                t2 = entry + (risk * 3)
         else:
             entry = signal.entry_min if hasattr(signal, 'entry_min') else signal.current_price
-            stop_loss = signal.stop_loss
-            t1 = signal.target_1 if hasattr(signal, 'target_1') else 0
-            t2 = signal.target_2 if hasattr(signal, 'target_2') else 0
+            
+            chart_levels = self._calculate_targets_from_chart(df, entry, 'BUY') if df is not None else None
+            
+            if chart_levels and chart_levels[0]:
+                stop_loss = chart_levels[0]
+                t1 = chart_levels[1]
+                t2 = chart_levels[2]
+            else:
+                stop_loss = signal.stop_loss
+                t1 = signal.target_1 if hasattr(signal, 'target_1') else 0
+                t2 = signal.target_2 if hasattr(signal, 'target_2') else 0
         
         quality = getattr(signal, 'quality', 'B')
-        score = getattr(signal, 'final_score', 0)
+        score = getattr(signal, 'final_score', None) or getattr(signal, 'rank_score', None) or getattr(signal, 'trend_score', 0)
         
         sl_pct = ((entry - stop_loss) / entry) * 100
         t1_pct = ((t1 - entry) / entry) * 100
@@ -747,7 +981,7 @@ Loss: -{loss_pct:.1f}%
             direction="BUY",
             entry=entry,
             stop_loss=stop_loss,
-            targets=[t1, t2],
+            targets=[float(t1) if t1 else 0.0, float(t2) if t2 else 0.0],
             indicators={
                 'volume_ratio': signal.volume_ratio,
                 'final_score': score
@@ -758,7 +992,57 @@ Loss: -{loss_pct:.1f}%
         )
         
         logger.info(f"New signal sent: {ticker} ({strategy})")
-    
+
+    def _send_top5_updates(self, stocks_data: dict, exclude_tickers: set = None):
+        """Send update alerts for open trades that are currently in the top 5 candidates."""
+        if exclude_tickers is None:
+            exclude_tickers = set()
+
+        open_trades = self.trade_journal.get_open_trades()
+        if not open_trades:
+            return
+
+        # Build set of tickers currently in top5
+        top5_tickers = set()
+        for sig in self._top5_candidates:
+            ticker = sig.ticker if hasattr(sig, 'ticker') else sig.stock_symbol
+            top5_tickers.add(ticker)
+
+        ist = pytz.timezone('Asia/Kolkata')
+        today = datetime.now(ist).date()
+        update_count = 0
+
+        for trade in open_trades:
+            ticker = trade.get('symbol', '').upper()
+            # Only consider today's signals
+            try:
+                trade_date = datetime.fromisoformat(trade.get('timestamp', '')).date()
+            except Exception:
+                trade_date = None
+            if trade_date != today:
+                continue
+
+            if ticker in top5_tickers and ticker not in exclude_tickers:
+                # Get current price
+                df = stocks_data.get(ticker)
+                if df is not None and not df.empty:
+                    current_price = float(df['close'].iloc[-1])
+                else:
+                    current_price = self._get_current_price(ticker)
+
+                if not current_price:
+                    logger.warning(f"Could not get current price for {ticker} update")
+                    continue
+
+                status = self._calculate_trade_status(trade, current_price)
+                message = self._format_update_for_telegram(trade, current_price, status)
+                target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
+                target_method(message)
+                update_count += 1
+                logger.info(f"Sent update for {ticker}: {status}")
+
+        logger.info(f"Top5 updates sent: {update_count}")
+
     def _run_mtf_strategy(self):
         """
         Run the Multi-Timeframe Strategy.
@@ -787,7 +1071,7 @@ Loss: -{loss_pct:.1f}%
                 return
             
             # Calculate indicators for each timeframe
-            from indicator_engine import IndicatorEngine
+            from core.indicator_engine import IndicatorEngine
             engine = IndicatorEngine()
             
             all_indicators = {}
@@ -844,6 +1128,144 @@ Loss: -{loss_pct:.1f}%
         except Exception as e:
             logger.error(f"Error in MTF strategy: {e}")
     
+    def _run_sentiment_driven_scan(self):
+        """
+        NEW: Run sentiment-driven stock scanner.
+        - Analyzes market sentiment (bullish/bearish/neutral)
+        - Identifies stocks running up with momentum
+        - Validates breakouts using AI
+        - Sends alerts for high-confidence breakouts aligned with market sentiment
+        
+        This helps catch stocks that are running even without traditional breakout patterns,
+        as long as they align with positive market sentiment.
+        """
+        try:
+            # Check if sentiment analysis is enabled
+            use_sentiment = self.settings.get('scanner', {}).get('enable_sentiment_analysis', True)
+            if not use_sentiment:
+                return
+            
+            logger.info("Running Sentiment-Driven Scan...")
+            
+            # Analyze market sentiment
+            sentiment_data = self.sentiment_analyzer.analyze_market_sentiment()
+            
+            sentiment = sentiment_data.get('sentiment', 'NEUTRAL')
+            logger.info(f"Market Sentiment: {sentiment} (Strength: {sentiment_data.get('sentiment_strength', 0):.2f})")
+            
+            # Send sentiment alert if significant
+            sentiment_alert = self.sentiment_analyzer.generate_sentiment_alert()
+            if sentiment_alert:
+                target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
+                target_method(sentiment_alert)
+            
+            # Only run detailed scan in bullish/neutral markets (skip in bearish)
+            if sentiment in ['STRONGLY_BEARISH']:
+                logger.info("Market is strongly bearish - skipping detailed sentiment scan")
+                return
+            
+            # Scan for breakouts aligned with sentiment
+            breakout_signals = self.sentiment_driven_scanner.scan_with_sentiment(self.stocks, lookback=5)
+            
+            if not breakout_signals:
+                logger.info("No sentiment-aligned breakouts found")
+                return
+            
+            logger.info(f"Found {len(breakout_signals)} potential breakout signals")
+            
+            # Filter and send top signals
+            target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
+            
+            max_sentiment_signals = self.settings.get('scanner', {}).get('max_sentiment_signals_per_scan', 3)
+            signals_sent = 0
+            current_signals = set()
+            
+            for signal in breakout_signals:
+                if signals_sent >= max_sentiment_signals:
+                    break
+                
+                symbol = signal.get('symbol')
+                
+                # ==================== NEW: Type Safety Check ====================
+                # Ensure symbol is not None before processing
+                if not symbol:
+                    logger.debug("Skipping signal: symbol is None")
+                    continue
+                
+                # Ensure symbol is string type
+                symbol = str(symbol) if not isinstance(symbol, str) else symbol
+                
+                signal_key = f"SENTIMENT:{symbol}"
+                current_signals.add(signal_key)
+                
+                # Skip if already alerted in this session
+                if signal_key in self.previous_signals:
+                    logger.debug(f"Skipping {symbol}: already alerted in this session")
+                    continue
+                
+                # Skip if in signal memory
+                if self.signal_memory.is_duplicate(symbol, 'SENTIMENT_BREAKOUT'):
+                    logger.info(f"Skipping {symbol}: in signal memory")
+                    continue
+                
+                # Skip if in trade journal
+                if self.trade_journal.check_signal_exists(symbol, 'SENTIMENT_BREAKOUT'):
+                    logger.info(f"Skipping {symbol}: exists in trade journal")
+                    continue
+                
+                # Only alert if confidence is high enough
+                confidence = signal.get('confidence', 0)
+                min_confidence = self.settings.get('scanner', {}).get('sentiment_min_confidence', 0.6)
+                
+                if confidence < min_confidence:
+                    logger.debug(f"Skipping {symbol}: confidence {confidence} < {min_confidence}")
+                    continue
+                
+                # Format and send alert
+                try:
+                    alert = self.sentiment_driven_scanner.format_breakout_alert(signal)
+                    target_method(alert)
+                    
+                    # Log to trade journal for tracking
+                    entry_price = signal.get('price', 0)
+                    support = signal.get('support', 0)
+                    resistance = signal.get('resistance', 0)
+                    
+                    self.trade_journal.log_signal(
+                        symbol=symbol,
+                        strategy='SENTIMENT_BREAKOUT',
+                        direction='BUY',
+                        entry=entry_price,
+                        stop_loss=support,
+                        targets=[resistance, resistance * 1.05],
+                        indicators={
+                            'price_change': signal.get('price_change', 0),
+                            'volume_ratio': signal.get('volume_ratio', 0),
+                            'rsi': signal.get('rsi', 0),
+                            'quality_score': signal.get('quality_score', 0),
+                            'confidence': confidence
+                        },
+                        quality='B' if confidence > 0.7 else 'C',
+                        entry_type='MOMENTUM_BREAKOUT',
+                        breakout_strength=signal.get('quality_score', 5) / 10.0
+                    )
+                    
+                    signals_sent += 1
+                    self.total_signals += 1
+                    logger.info(f"Sent sentiment-driven alert for {symbol} (confidence: {confidence:.0%})")
+                    
+                except Exception as e:
+                    logger.error(f"Error sending sentiment alert for {symbol}: {e}")
+            
+            # Update previous signals
+            self.previous_signals = self.previous_signals.union(current_signals)
+            
+            if signals_sent > 0:
+                logger.info(f"Sentiment-driven scan complete - Sent {signals_sent} alerts")
+            
+        except Exception as e:
+            logger.error(f"Error in sentiment-driven scan: {e}", exc_info=True)
+    
     def _run_all_strategies(self, stocks_data):
         """
         Run strategy based on configuration (Trend, VERC, or both).
@@ -858,12 +1280,25 @@ Loss: -{loss_pct:.1f}%
         - IF TREND and NIFTY SIDEWAYS: reject weak signals
         - IF TREND and NIFTY BEARISH: reduce score by -1 (not -2)
         - VERC allowed in all market conditions
+        
+        NEW: Applies learning-based filtering to reject signals based on historical failures.
         """
-        from trade_journal import TradeJournal
+        from trade.trade_journal import TradeJournal
         
         excluded_stocks = self.signal_memory.get_excluded_stocks()
         
         market_context = self.market_context_engine.get_context()
+        
+        # ==================== NEW: Get Learning Insights ====================
+        learning_insights = None
+        learning_blacklist = set()
+        if self.ai_learning_layer and self.ai_learning_layer.is_available():
+            try:
+                learning_insights = self.ai_learning_layer.analyze_recent_trades(limit=50)
+                if learning_insights.get('issues'):
+                    logger.debug(f"Learning insights - Issues: {learning_insights['issues'][:2]}")
+            except Exception as e:
+                logger.debug(f"Could not get learning insights: {e}")
         
         all_signals = []
         current_signals = set()
@@ -872,10 +1307,14 @@ Loss: -{loss_pct:.1f}%
             trend_signals = self._get_trend_signals(stocks_data)
             for signal in trend_signals:
                 if signal.ticker not in excluded_stocks:
-                    df = stocks_data.get(signal.ticker)
-                    
                     signal.strategy_type = 'TREND'
                     signal.strategy_score = signal.trend_score if hasattr(signal, 'trend_score') else 0
+                    
+                    if signal.strategy_score < 6:
+                        logger.debug(f"Skipping {signal.ticker}: score {signal.strategy_score} < 6")
+                        continue
+                    
+                    df = stocks_data.get(signal.ticker)
                     signal.volume_ratio = signal.indicators.get('volume_ratio', 0)
                     signal.breakout_strength = self._calculate_breakout_strength(signal.indicators)
                     
@@ -897,6 +1336,13 @@ Loss: -{loss_pct:.1f}%
                         logger.info(f"❌ Rejected {signal.ticker}: No valid breakout")
                         continue
                     
+                    # ==================== NEW: Learning-Based Filtering ====================
+                    # Check if this signal matches blacklisted patterns from learning
+                    if learning_insights and learning_insights.get('blacklisted_stocks'):
+                        if signal.ticker in learning_insights.get('blacklisted_stocks', []):
+                            logger.info(f"❌ Rejected {signal.ticker}: Blacklisted by learning system")
+                            continue
+                    
                     signal.base_rank_score = self._calculate_base_rank_score(signal)
                     
                     if market_context == 'SIDEWAYS' and signal.base_rank_score < 6:
@@ -908,6 +1354,7 @@ Loss: -{loss_pct:.1f}%
                     else:
                         signal.rank_score = signal.base_rank_score
                     
+                    signal.final_score = self._calculate_final_score(signal)
                     signal.market_context = market_context
                     
                     signal.quality = TradeJournal.calculate_quality(
@@ -917,7 +1364,8 @@ Loss: -{loss_pct:.1f}%
                     )
                     
                     if self._check_no_trade_zone(signal, stocks_data.get(signal.ticker), market_context):
-                        logger.info(f"Signal {signal.ticker} rejected by no-trade zone: {signal.get('rejection_reason', 'N/A')}")
+                        rejection_reason = getattr(signal, 'rejection_reason', 'N/A')
+                        logger.info(f"Signal {signal.ticker} rejected by no-trade zone: {rejection_reason}")
                         continue
                     
                     logger.info(f"Signal accepted: {signal.ticker} | strategy: {signal.strategy_type} | score: {signal.rank_score:.2f} | quality: {signal.quality} | market_context: {signal.market_context}")
@@ -938,9 +1386,17 @@ Loss: -{loss_pct:.1f}%
                         logger.info(f"Signal {signal.stock_symbol} rejected by trade validator: {reason}")
                         continue
                     
+                    # ==================== NEW: Learning-Based Filtering ====================
+                    # Check if this signal matches blacklisted patterns from learning
+                    if learning_insights and learning_insights.get('blacklisted_stocks'):
+                        if signal.stock_symbol in learning_insights.get('blacklisted_stocks', []):
+                            logger.info(f"❌ Rejected {signal.stock_symbol}: Blacklisted by learning system")
+                            continue
+                    
                     signal.base_rank_score = self._calculate_base_rank_score(signal)
                     
                     signal.rank_score = signal.base_rank_score
+                    signal.final_score = self._calculate_final_score(signal)
                     signal.market_context = market_context
                     
                     signal.quality = TradeJournal.calculate_quality(
@@ -950,7 +1406,8 @@ Loss: -{loss_pct:.1f}%
                     )
                     
                     if self._check_no_trade_zone(signal, stocks_data.get(signal.stock_symbol), market_context):
-                        logger.info(f"Signal {signal.stock_symbol} rejected by no-trade zone: {signal.get('rejection_reason', 'N/A')}")
+                        rejection_reason = getattr(signal, 'rejection_reason', 'N/A')
+                        logger.info(f"Signal {signal.stock_symbol} rejected by no-trade zone: {rejection_reason}")
                         continue
                     
                     logger.info(f"Signal accepted: {signal.stock_symbol} | strategy: {signal.strategy_type} | score: {signal.rank_score:.2f} | quality: {signal.quality} | market_context: {signal.market_context}")
@@ -1204,13 +1661,35 @@ Loss: -{loss_pct:.1f}%
         # Use channel if configured
         target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
         
+        agent_state = self.agent_controller.get_agent_state()
+        
         for alert in alerts:
-            target_method(alert)
+            explanation_header = f"\n🤖 Agent Context:\n"
+            explanation_header += f"  Regime: {agent_state.get('last_decision', {}).get('market_regime', 'unknown')}\n"
+            explanation_header += f"  Confidence: {agent_state.get('last_decision', {}).get('confidence', 5)}/10\n"
+            
+            full_alert = alert + explanation_header
+            
+            target_method(full_alert)
             self.total_signals += 1
     
-    def _send_no_signals_message(self):
+    def _send_no_signals_message(self, skipped_candidates=None):
         """Send 'no signals' message when no signals are found."""
-        message = "⚠️ No signals."
+        if skipped_candidates and len(skipped_candidates) > 0:
+            # Group reasons and show top 5
+            reason_counts = {}
+            for candidate in skipped_candidates:
+                reason = candidate.get('reason', 'Unknown')
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            
+            top_reasons = sorted(reason_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+            
+            message = "⚠️ No signals found.\n\nTop filter reasons:\n"
+            for reason, count in top_reasons:
+                message += f"• {reason} ({count} stocks)\n"
+            message += f"\nTotal candidates checked: {len(skipped_candidates)}"
+        else:
+            message = "⚠️ No signals."
         
         target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
         target_method(message)
@@ -1242,34 +1721,51 @@ Loss: -{loss_pct:.1f}%
         else:
             return 'OPEN'
     
-    def _format_signal_for_telegram(self, signal, strategy_type: str, current_price: float = 0) -> str:
+    def _format_signal_for_telegram(self, signal, strategy_type: str, current_price: float = 0, df=None) -> str:
         """Format a new signal for Telegram - clean format."""
         if strategy_type == 'TREND':
             indicators = signal.indicators
             ticker = signal.ticker
             entry = indicators.get('close', 0)
-            ema50 = indicators.get('ema50', 0)
-            atr = indicators.get('atr', 0)
             
-            stop_loss = min(ema50, entry * 0.98) if ema50 > 0 else entry * 0.98
-            if atr > 0:
-                stop_loss = min(stop_loss, entry - (2 * atr))
+            chart_levels = self._calculate_targets_from_chart(df, entry, 'BUY') if df is not None else None
             
-            risk = entry - stop_loss
-            target_1 = entry + (risk * 2) if risk > 0 else entry * 1.1
-            target_2 = entry + (risk * 3) if risk > 0 else entry * 1.15
-            target_3 = entry + (risk * 4) if risk > 0 else entry * 1.2
+            if chart_levels and chart_levels[0]:
+                stop_loss = chart_levels[0]
+                target_1 = chart_levels[1]
+                target_2 = chart_levels[2]
+                # Safely calculate target_3 with None checks
+                if target_2 and target_1 and isinstance(target_2, (int, float)) and isinstance(target_1, (int, float)):
+                    target_3 = target_2 * 1.015 if target_2 > target_1 else target_2 * 0.985
+                else:
+                    target_3 = target_2 if target_2 else entry * 1.2
+            else:
+                ema50 = indicators.get('ema_50', 0)
+                atr = indicators.get('atr', 0)
+                
+                stop_loss = min(ema50, entry * 0.98) if ema50 > 0 else entry * 0.98
+                if atr > 0:
+                    stop_loss = min(stop_loss, entry - (2 * atr))
+                
+                risk = entry - stop_loss
+                target_1 = entry + (risk * 2) if risk > 0 else entry * 1.1
+                target_2 = entry + (risk * 3) if risk > 0 else entry * 1.15
+                target_3 = entry + (risk * 4) if risk > 0 else entry * 1.2
             
             rsi = indicators.get('rsi_value', 0) or indicators.get('rsi', 0)
             volume_ratio = signal.volume_ratio if hasattr(signal, 'volume_ratio') else indicators.get('volume_ratio', 0)
-            score = signal.rank_score if hasattr(signal, 'rank_score') else signal.trend_score if hasattr(signal, 'trend_score') else 0
+            score = 0
+            if hasattr(signal, 'rank_score') and signal.rank_score is not None:
+                score = signal.rank_score
+            elif hasattr(signal, 'trend_score') and signal.trend_score is not None:
+                score = signal.trend_score
             current_price = entry
             
             return (
                 f"📈 {ticker}\n"
-                f"🎯 Entry: {entry:.0f}\n"
-                f"🛡️ SL: {stop_loss:.0f}\n"
-                f"🚀 Targets: {target_1:.0f} / {target_2:.0f} / {target_3:.0f}\n"
+                f"🎯 Entry: {entry:.2f}\n"
+                f"🛡️ SL: {stop_loss:.2f}\n"
+                f"🚀 Targets: {target_1:.2f} / {target_2:.2f} / {target_3:.2f}\n"
                 f"⭐ Score: {score:.1f}"
             )
         else:
@@ -1278,14 +1774,24 @@ Loss: -{loss_pct:.1f}%
             stop_loss = signal.stop_loss
             t1 = signal.target_1 if hasattr(signal, 'target_1') else 0
             t2 = signal.target_2 if hasattr(signal, 'target_2') else 0
-            t3 = signal.target_3 if hasattr(signal, 'target_3') else 0
-            score = signal.rank_score if hasattr(signal, 'rank_score') else signal.confidence_score if hasattr(signal, 'confidence_score') else 0
+            t3 = 0
+            if t1 > 0 and t2 > 0 and stop_loss > 0:
+                risk = entry - stop_loss
+                t3 = entry + (risk * 4)
+            
+            score = 0
+            if hasattr(signal, 'confidence_score') and signal.confidence_score is not None:
+                score = float(signal.confidence_score)
+            elif hasattr(signal, 'verc_score') and signal.verc_score is not None:
+                score = float(signal.verc_score)
+            elif hasattr(signal, 'rank_score') and signal.rank_score is not None:
+                score = signal.rank_score
             
             return (
                 f"📈 {ticker}\n"
-                f"🎯 Entry: {entry:.0f}\n"
-                f"🛡️ SL: {stop_loss:.0f}\n"
-                f"🚀 Targets: {t1:.0f} / {t2:.0f} / {t3:.0f}\n"
+                f"🎯 Entry: {entry:.2f}\n"
+                f"🛡️ SL: {stop_loss:.2f}\n"
+                f"🚀 Targets: {t1:.2f} / {t2:.2f} / {t3:.2f}\n"
                 f"⭐ Score: {score:.1f}"
             )
     
@@ -1303,7 +1809,7 @@ Loss: -{loss_pct:.1f}%
             f"Note: Already shared earlier"
         )
     
-    def _process_signal(self, signal, strategy_type: str, is_startup: bool = False) -> bool:
+    def _process_signal(self, signal, strategy_type: str, is_startup: bool = False, df=None) -> bool:
         """Process a signal: check if exists in journal or send as new."""
         from datetime import datetime
         
@@ -1345,25 +1851,61 @@ Loss: -{loss_pct:.1f}%
                     indicators = signal.indicators
                     current_price = indicators.get('close', 0)
                     entry = current_price
-                    ema50 = indicators.get('ema50', 0)
-                    atr = indicators.get('atr', 0)
                     
-                    stop_loss = min(ema50, entry * 0.98) if ema50 > 0 else entry * 0.98
-                    if atr > 0:
-                        stop_loss = min(stop_loss, entry - (2 * atr))
+                    chart_levels = self._calculate_targets_from_chart(df, entry, 'BUY') if df is not None else None
                     
-                    risk = entry - stop_loss
-                    target_1 = entry + (risk * 2)
-                    target_2 = entry + (risk * 3)
-                    target_3 = entry + (risk * 4)
-                    targets = [target_1, target_2, target_3]
+                    if chart_levels and chart_levels[0]:
+                        stop_loss = chart_levels[0]
+                        target_1 = chart_levels[1]
+                        target_2 = chart_levels[2]
+                        # Safely handle None values in targets
+                        if target_2 and target_1 and isinstance(target_2, (int, float)) and isinstance(target_1, (int, float)):
+                            target_3 = target_2 * 1.015 if target_2 > target_1 else target_2 * 0.985
+                            targets = [float(target_1), float(target_2), float(target_3)]
+                        else:
+                            targets = [float(target_1) if target_1 else 0.0, float(target_2) if target_2 else 0.0]
+                    else:
+                        ema50 = indicators.get('ema50', 0)
+                        atr = indicators.get('atr', 0)
+                        
+                        stop_loss = min(ema50, entry * 0.98) if ema50 > 0 else entry * 0.98
+                        if atr > 0:
+                            stop_loss = min(stop_loss, entry - (2 * atr))
+                        
+                        risk = entry - stop_loss
+                        target_1 = entry + (risk * 2)
+                        target_2 = entry + (risk * 3)
+                        target_3 = entry + (risk * 4)
+                        targets = [float(target_1), float(target_2), float(target_3)]
                     
                     rsi = indicators.get('rsi_value', 0) or indicators.get('rsi', 0)
                     volume_ratio = signal.volume_ratio if hasattr(signal, 'volume_ratio') else indicators.get('volume_ratio', 0)
                 else:
                     entry = signal.entry_min if hasattr(signal, 'entry_min') else signal.current_price
-                    stop_loss = signal.stop_loss
-                    targets = [signal.target_1, signal.target_2, signal.target_3] if hasattr(signal, 'target_1') else []
+                    
+                    chart_levels = self._calculate_targets_from_chart(df, entry, 'BUY') if df is not None else None
+                    
+                    if chart_levels and chart_levels[0]:
+                        stop_loss = chart_levels[0]
+                        t1 = chart_levels[1]
+                        t2 = chart_levels[2]
+                        # Safely handle None values in targets
+                        if t1 and t2 and isinstance(t1, (int, float)) and isinstance(t2, (int, float)):
+                            targets = [float(t1), float(t2)] if t1 > 0 and t2 > 0 else []
+                            if targets and t2 and t1 and stop_loss and stop_loss > 0:
+                                t3 = t2 * 1.015 if t2 > t1 else t2 * 0.985
+                                targets.append(float(t3))
+                        else:
+                            targets = []
+                    else:
+                        stop_loss = signal.stop_loss
+                        t1 = signal.target_1 if hasattr(signal, 'target_1') else 0
+                        t2 = signal.target_2 if hasattr(signal, 'target_2') else 0
+                        targets = [float(t1), float(t2)] if t1 > 0 and t2 > 0 else []
+                        if t1 > 0 and t2 > 0 and stop_loss > 0:
+                            risk = entry - stop_loss
+                            t3 = entry + (risk * 4)
+                            targets.append(float(t3))
                     rsi = signal.rsi if hasattr(signal, 'rsi') else 0
                     volume_ratio = signal.relative_volume if hasattr(signal, 'relative_volume') else 0
                     current_price = signal.current_price if hasattr(signal, 'current_price') else entry
@@ -1374,6 +1916,21 @@ Loss: -{loss_pct:.1f}%
                     'trend_score': signal.trend_score if hasattr(signal, 'trend_score') else 0,
                     'rank_score': signal.rank_score if hasattr(signal, 'rank_score') else 0
                 }
+                
+                # ==================== NEW: ENHANCED SIGNAL VALIDATION ====================
+                # Validate signal before sending alert
+                is_valid, validation_reason = self.signal_validator.validate_signal_before_sending(
+                    signal, 
+                    df=df,
+                    use_ai=True  # Use AI to validate
+                )
+                
+                if not is_valid:
+                    logger.warning(f"Signal {ticker} rejected by validator: {validation_reason}")
+                    return False
+                
+                logger.info(f"Signal {ticker} passed validation: {validation_reason}")
+                
                 trade_id = self.trade_journal.log_signal(
                     ticker,
                     strategy_type,
@@ -1388,7 +1945,7 @@ Loss: -{loss_pct:.1f}%
                     breakout_strength=getattr(signal, 'breakout_strength', 0)
                 )
                 
-                signal_msg = self._format_signal_for_telegram(signal, strategy_type, current_price)
+                signal_msg = self._format_signal_for_telegram(signal, strategy_type, current_price, df)
                 self.alert_service.send_alert(signal_msg)
                 self.total_signals += 1
                 logger.info(f"New signal sent for {ticker}: {trade_id}")
@@ -1477,8 +2034,10 @@ Loss: -{loss_pct:.1f}%
         final_signals = all_signals[:5]
         
         for signal in final_signals:
+            ticker = signal.ticker if hasattr(signal, 'ticker') else signal.stock_symbol
+            df = stocks_data.get(ticker) if stocks_data else None
             strategy_type = signal.strategy_type if hasattr(signal, 'strategy_type') and signal.strategy_type else 'TREND'
-            self._process_signal(signal, strategy_type, is_startup=True)
+            self._process_signal(signal, strategy_type, is_startup=True, df=df)
         
         logger.info(f"Startup scan complete - processed {len(final_signals)} signals")
     
@@ -1560,8 +2119,10 @@ Loss: -{loss_pct:.1f}%
         final_signals = all_signals[:5]
         
         for signal in final_signals:
+            ticker = signal.ticker if hasattr(signal, 'ticker') else signal.stock_symbol
+            df = stocks_data.get(ticker) if stocks_data else None
             strategy_type = signal.strategy_type if hasattr(signal, 'strategy_type') and signal.strategy_type else 'TREND'
-            self._process_signal(signal, strategy_type, is_startup=False)
+            self._process_signal(signal, strategy_type, is_startup=False, df=df)
         
         logger.info(f"3PM update complete - processed {len(final_signals)} signals")
     
@@ -1596,7 +2157,6 @@ Loss: -{loss_pct:.1f}%
         if df is None or len(df) < lookback:
             return None, None
         
-        # Check if required columns exist
         if 'high' not in df.columns or 'low' not in df.columns:
             return None, None
         
@@ -1608,6 +2168,109 @@ Loss: -{loss_pct:.1f}%
             return support, resistance
         except Exception:
             return None, None
+    
+    def _calculate_swing_levels(self, df, lookback=20):
+        """Calculate swing-based SL and target levels from chart.
+        
+        Returns:
+            dict with 'swing_low', 'swing_high', 'nearest_support', 'nearest_resistance', 'levels'
+        """
+        if df is None or len(df) < 10:
+            return None
+        
+        if 'high' not in df.columns or 'low' not in df.columns:
+            return None
+        
+        try:
+            lookback = min(lookback, len(df))
+            recent = df.tail(lookback).copy()
+            highs = recent['high'].values
+            lows = recent['low'].values
+            current_price = recent['close'].iloc[-1]
+            
+            swing_highs = []
+            swing_lows = []
+            
+            for i in range(2, len(highs) - 2):
+                if highs[i] > highs[i-1] and highs[i] > highs[i+1] and \
+                   highs[i] > highs[i-2] and highs[i] > highs[i+2]:
+                    swing_highs.append(highs[i])
+                if lows[i] < lows[i-1] and lows[i] < lows[i+1] and \
+                   lows[i] < lows[i-2] and lows[i] < lows[i+2]:
+                    swing_lows.append(lows[i])
+            
+            if not swing_highs and not swing_lows:
+                return None
+            
+            recent_highs = swing_highs[-3:] if len(swing_highs) >= 3 else swing_highs
+            recent_lows = swing_lows[-3:] if len(swing_lows) >= 3 else swing_lows
+            
+            swing_high = max(recent_highs) if recent_highs else max(highs[-3:])
+            swing_low = min(recent_lows) if recent_lows else min(lows[-3:])
+            
+            supports = sorted([l for l in recent_lows if l < current_price], reverse=True)
+            resistances = sorted([h for h in recent_highs if h > current_price])
+            
+            if not supports:
+                supports = sorted([l for l in lows if l < current_price], reverse=True)[:3]
+            if not resistances:
+                resistances = sorted([h for h in highs if h > current_price])[:3]
+            
+            nearest_support = supports[0] if supports else swing_low
+            nearest_resistance = resistances[0] if resistances else swing_high
+            
+            return {
+                'swing_high': swing_high,
+                'swing_low': swing_low,
+                'nearest_support': nearest_support,
+                'nearest_resistance': nearest_resistance,
+                'all_swing_highs': recent_highs,
+                'all_swing_lows': recent_lows,
+                'current_price': current_price
+            }
+        except Exception:
+            return None
+    
+    def _calculate_targets_from_chart(self, df, entry_price, direction='BUY'):
+        """Calculate SL and targets based on chart swing levels.
+        
+        For BUY: SL = nearest support/swing low, T1 = nearest resistance, T2 = next resistance
+        For SELL: SL = nearest resistance/swing high, T1 = nearest support, T2 = next support
+        """
+        levels = self._calculate_swing_levels(df)
+        
+        if levels is None:
+            return None, None, None, None
+        
+        swing_low = levels['swing_low']
+        swing_high = levels['swing_high']
+        nearest_support = levels['nearest_support']
+        nearest_resistance = levels['nearest_resistance']
+        all_highs = levels['all_swing_highs']
+        all_lows = levels['all_swing_lows']
+        
+        if direction == 'BUY':
+            stop_loss = nearest_support * 0.99
+            if swing_low < nearest_support:
+                stop_loss = min(stop_loss, swing_low * 0.99)
+            
+            target_1 = nearest_resistance
+            target_2 = all_highs[-2] if len(all_highs) >= 2 else nearest_resistance * 1.02
+            
+            if target_2 <= target_1:
+                target_2 = target_1 * 1.02
+        else:
+            stop_loss = nearest_resistance * 1.01
+            if swing_high > nearest_resistance:
+                stop_loss = max(stop_loss, swing_high * 1.01)
+            
+            target_1 = nearest_support
+            target_2 = all_lows[-2] if len(all_lows) >= 2 else nearest_support * 0.98
+            
+            if target_2 >= target_1:
+                target_2 = target_1 * 0.98
+        
+        return stop_loss, target_1, target_2, levels
     
     def _estimate_time_to_target(self, current_price, target_price, atr):
         """Estimate time to reach target based on ATR.
@@ -1700,6 +2363,31 @@ Loss: -{loss_pct:.1f}%"""
                 total_closed = len(closed_trades)
                 
                 if total_closed >= 20:
+                    # ==================== NEW: AI Learning Analysis ====================
+                    # Analyze recent trades using AI learning layer
+                    logger.info("🤖 Starting AI Learning Analysis...")
+                    learning_result = self.ai_learning_layer.analyze_recent_trades(limit=50)
+                    
+                    if learning_result.get('recommendations'):
+                        logger.info(f"🧠 Learning insights found: {learning_result['recommendations'][:3]}")
+                        
+                        # Generate AI insights for deeper analysis
+                        if self.ai_learning_layer.is_available():
+                            ai_insights = self.ai_learning_layer.generate_ai_insights()
+                            if ai_insights.get('insights'):
+                                logger.info(f"🔍 AI Insights: {ai_insights['insights'][:2]}")
+                        
+                        # Apply recommended filters from learning
+                        filter_result = self.ai_learning_layer.apply_recommended_filters()
+                        if filter_result and filter_result.get('new_filters'):
+                            logger.info(f"✅ Applied adaptive filters from learning: {filter_result['applied_count']} filters updated")
+                            
+                            # Refresh AI rules engine with new filters
+                            if self.ai_rules_engine:
+                                self.ai_rules_engine._load_adaptive_filters()
+                                logger.info("✅ AI Rules Engine filters refreshed with learning data")
+                    
+                    # ==================== Factor Analysis ====================
                     self.factor_analyzer.batch_analyze(closed_trades)
                     
                     recommendations = self.factor_analyzer.get_optimization_recommendations()
@@ -1708,8 +2396,13 @@ Loss: -{loss_pct:.1f}%"""
                     
                     self.strategy_optimizer.auto_optimize()
                     
+                    # Log learning report
+                    learning_report = self.ai_learning_layer.get_learning_report()
+                    if learning_report:
+                        logger.info(f"📊 Learning Report: {learning_report.get('summary', '')}")
+                    
                     self._last_learning_time = datetime.now()
-                    logger.info(f"Learning run: {total_closed} closed trades analyzed")
+                    logger.info(f"✅ Learning run complete: {total_closed} closed trades analyzed")
                 else:
                     logger.debug(f"Skipping learning: only {total_closed} closed trades (need 20+)")
                 
@@ -1817,7 +2510,7 @@ Loss: -{loss_pct:.1f}%"""
             
             risk = entry - stop_loss
             target_1 = entry + (risk * 2)
-            targets = [target_1, entry + (risk * 3)]
+            targets = [float(target_1), float(entry + (risk * 3))]
             
             quality = getattr(signal, 'quality', 'B')
             market_context = getattr(signal, 'market_context', 'BULLISH')
@@ -1862,7 +2555,7 @@ Loss: -{loss_pct:.1f}%"""
             entry = signal.entry_min if hasattr(signal, 'entry_min') else signal.current_price
             stop_loss = signal.stop_loss if hasattr(signal, 'stop_loss') else 0
             target_1 = signal.target_1 if hasattr(signal, 'target_1') else 0
-            targets = [target_1, signal.target_2] if hasattr(signal, 'target_2') else [target_1]
+            targets = [float(target_1), float(signal.target_2)] if hasattr(signal, 'target_2') else [float(target_1)]
             
             quality = getattr(signal, 'quality', 'B')
             market_context = getattr(signal, 'market_context', 'BULLISH')
@@ -1932,23 +2625,43 @@ Loss: -{loss_pct:.1f}%"""
             logger.info("Telegram bot handler started")
         
         # Setup dual-mode scheduler
-        # Continuous mode: every 15 minutes - monitoring only + scanning for new signals
-        # Signal generation mode: 3:00 PM - send top 5 signals as alerts
+        # Continuous mode: every 15 minutes during market hours - monitoring only + scanning for new signals
+        # Signal generation mode: 3:00 PM daily - send top 5 signals
         
         scan_interval = self.settings.get('scanner', {}).get('scan_interval_minutes', 15)
         
-        # Add continuous monitoring job (every 15 min - monitors active trades)
-        self.scheduler.add_continuous_job(self.run_continuous_monitoring, 'continuous_monitor')
+        # Use market-hour-aware scheduling - jobs only run during market hours (9:15-15:30 IST, Mon-Fri)
+        self.scheduler.add_continuous_job(
+            self.run_continuous_monitoring,
+            'continuous_monitor'
+        )
+
+        self.scheduler.add_continuous_job(
+            self._run_periodic_scan,
+            'periodic_scan'
+        )
         
-        # Add periodic scanning job (every 15 min - scans for new signals, stores them)
-        self.scheduler.add_continuous_job(self._run_periodic_scan, 'periodic_scan')
-        
-        # Add signal generation job (3:00 PM daily - sends top 5 signals)
-        self.scheduler.add_signal_generation_job(self.run_signal_generation, 'signal_generator')
+        # Add signal generation jobs at configured alert hours
+        for hour in self.alert_hours:
+            job_id = f'signal_generator_{hour}'
+            self.scheduler.add_signal_generation_job(
+                self.run_signal_generation,
+                job_id=job_id,
+                hour=hour
+            )
+            logger.info(f"Added signal generation job at {hour}:00 IST")
         
         # Start scheduler
         self.scheduler.start()
-        
+
+        # Update global scanner state for UI
+        try:
+            from api import scanner_state
+            scanner_state["running"] = True
+            scanner_state["last_scan"] = datetime.now().isoformat()
+        except Exception as e:
+            logger.warning(f"Could not update scanner_state: {e}")
+
         logger.info(f"Scheduler started - Continuous monitor: every {scan_interval}min, Signal gen: {self.daily_signal_hour}:00 IST")
         
         # Keep main thread alive
@@ -1968,8 +2681,6 @@ Loss: -{loss_pct:.1f}%"""
         - If signals satisfy criteria, sends them as alerts
         - If no signals satisfy criteria, sends 'no signals yet' alert
         """
-        import pytz
-        
         ist = pytz.timezone('Asia/Kolkata')
         current_time = datetime.now(ist)
         
@@ -1981,9 +2692,11 @@ Loss: -{loss_pct:.1f}%"""
                 logger.warning("Startup scan - No data fetched from server")
                 return
             
+            skipped_candidates = []
+            
             all_signals = []
             
-            from trade_journal import TradeJournal
+            from trade.trade_journal import TradeJournal
             
             if self.strategy in ['trend', 'all']:
                 trend_signals = self._get_trend_signals(stocks_data)
@@ -1996,21 +2709,37 @@ Loss: -{loss_pct:.1f}%"""
                     is_valid, reason = self.trade_validator.validate_with_indicators(signal)
                     if not is_valid:
                         logger.info(f"Signal {signal.ticker} rejected by trade validator: {reason}")
+                        skipped_candidates.append({
+                            'ticker': signal.ticker,
+                            'reason': reason
+                        })
                         continue
                     
                     df = stocks_data.get(signal.ticker)
                     
                     if not is_tight_consolidation(df):
                         logger.info(f"❌ Rejected {signal.ticker}: No tight consolidation")
+                        skipped_candidates.append({
+                            'ticker': signal.ticker,
+                            'reason': 'No tight consolidation'
+                        })
                         continue
                     
                     if not is_strong_breakout(df):
                         logger.info(f"❌ Rejected {signal.ticker}: Weak breakout")
+                        skipped_candidates.append({
+                            'ticker': signal.ticker,
+                            'reason': 'Weak breakout'
+                        })
                         continue
                     
                     breakout_type = is_valid_breakout(df)
                     if breakout_type is None or breakout_type != 'BUY':
                         logger.info(f"❌ Rejected {signal.ticker}: No valid breakout")
+                        skipped_candidates.append({
+                            'ticker': signal.ticker,
+                            'reason': 'No valid breakout'
+                        })
                         continue
                     
                     signal.base_rank_score = self._calculate_base_rank_score(signal)
@@ -2035,21 +2764,37 @@ Loss: -{loss_pct:.1f}%"""
                     is_valid, reason = self.trade_validator.validate_with_indicators(signal)
                     if not is_valid:
                         logger.info(f"Signal {signal.stock_symbol} rejected by trade validator: {reason}")
+                        skipped_candidates.append({
+                            'ticker': signal.stock_symbol,
+                            'reason': reason
+                        })
                         continue
                     
                     df = stocks_data.get(signal.stock_symbol)
                     
                     if not is_tight_consolidation(df):
                         logger.info(f"❌ Rejected {signal.stock_symbol}: No tight consolidation")
+                        skipped_candidates.append({
+                            'ticker': signal.stock_symbol,
+                            'reason': 'No tight consolidation'
+                        })
                         continue
                     
                     if not is_strong_breakout(df):
                         logger.info(f"❌ Rejected {signal.stock_symbol}: Weak breakout")
+                        skipped_candidates.append({
+                            'ticker': signal.stock_symbol,
+                            'reason': 'Weak breakout'
+                        })
                         continue
                     
                     breakout_type = is_valid_breakout(df)
                     if breakout_type is None or breakout_type != 'BUY':
                         logger.info(f"❌ Rejected {signal.stock_symbol}: No valid breakout")
+                        skipped_candidates.append({
+                            'ticker': signal.stock_symbol,
+                            'reason': 'No valid breakout'
+                        })
                         continue
                     
                     signal.base_rank_score = self._calculate_base_rank_score(signal)
@@ -2065,6 +2810,7 @@ Loss: -{loss_pct:.1f}%"""
             
             all_signals.sort(key=lambda x: getattr(x, 'final_score', 0), reverse=True)
             
+            skipped_candidates = []
             filtered_signals = []
             for signal in all_signals:
                 if self._signals_sent_today >= self.max_signals_per_day:
@@ -2074,13 +2820,39 @@ Loss: -{loss_pct:.1f}%"""
                 
                 if self.trade_journal.check_signal_exists(ticker, signal.strategy_type):
                     logger.info(f"Skipping {ticker}: already exists in trade journal")
+                    skipped_candidates.append({
+                        'ticker': ticker,
+                        'reason': 'Already exists in trade journal'
+                    })
                     continue
                 
                 confidence = getattr(signal, 'final_score', 0)
                 if confidence < self.confidence_threshold:
                     logger.info(f"Skipping {ticker}: confidence {confidence} < threshold {self.confidence_threshold}")
+                    skipped_candidates.append({
+                        'ticker': ticker,
+                        'reason': f'Confidence {confidence:.1f} < threshold {self.confidence_threshold}'
+                    })
                     continue
                 
+                # ==================== NEW: ENHANCED VALIDATION ====================
+                # Additional validation: technical patterns, AI approval, stop loss checks
+                df = stocks_data.get(ticker)
+                is_valid, validation_reason = self.signal_validator.validate_signal_before_sending(
+                    signal,
+                    df=df,
+                    use_ai=True  # Use AI for validation
+                )
+                
+                if not is_valid:
+                    logger.info(f"Skipping {ticker}: {validation_reason}")
+                    skipped_candidates.append({
+                        'ticker': ticker,
+                        'reason': validation_reason
+                    })
+                    continue
+                
+                logger.info(f"Signal {ticker} passed enhanced validation: {validation_reason}")
                 filtered_signals.append(signal)
             
             filtered_signals = filtered_signals[:self.max_signals_per_day]
@@ -2088,11 +2860,17 @@ Loss: -{loss_pct:.1f}%"""
             target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
             
             if not filtered_signals:
-                self._send_startup_no_signals_message()
+                self._send_startup_no_signals_message(skipped_candidates)
                 return
             
+            signal_dfs = {}
             for signal in filtered_signals:
-                self._send_new_signal_alert(signal, target_method)
+                ticker = signal.ticker if hasattr(signal, 'ticker') else signal.stock_symbol
+                signal_dfs[signal] = stocks_data.get(ticker)
+            
+            for signal in filtered_signals:
+                df = signal_dfs.get(signal)
+                self._send_new_signal_alert(signal, target_method, df)
                 self._signals_sent_today += 1
             
             logger.info(f"Startup scan complete - Sent {len(filtered_signals)} signals")
@@ -2100,9 +2878,23 @@ Loss: -{loss_pct:.1f}%"""
         except Exception as e:
             logger.error(f"Error in startup notification scan: {e}")
     
-    def _send_startup_no_signals_message(self, reason: str = ""):
+    def _send_startup_no_signals_message(self, skipped_candidates=None):
         """Send 'no signals yet' message on startup when no signals satisfy criteria."""
-        message = "⚠️ No signals."
+        if skipped_candidates and len(skipped_candidates) > 0:
+            # Group reasons and show top 5
+            reason_counts = {}
+            for candidate in skipped_candidates:
+                reason = candidate.get('reason', 'Unknown')
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            
+            top_reasons = sorted(reason_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+            
+            message = "⚠️ No signals found on startup.\n\nTop filter reasons:\n"
+            for reason, count in top_reasons:
+                message += f"• {reason} ({count} stocks)\n"
+            message += f"\nTotal candidates checked: {len(skipped_candidates)}"
+        else:
+            message = "⚠️ No signals."
         
         target_method = self.alert_service.send_to_channel if self.alert_service.channel_chat_id else self.alert_service.send_alert
         target_method(message)
@@ -2113,15 +2905,49 @@ Loss: -{loss_pct:.1f}%"""
         Run periodic scan every 15 minutes.
         Scans for signals that satisfy criteria and stores them in pending queue.
         Does NOT send alerts immediately - only sends at 3 PM.
-        """
-        import pytz
         
+        NEW: Periodically checks for learning updates and refreshes adaptive filters.
+        """
         ist = pytz.timezone('Asia/Kolkata')
         now = datetime.now(ist)
+        
+        # ==================== NEW: Periodic Learning Check ====================
+        # Every 2 hours (8 scans = 8 * 15 min), analyze trades and refresh filters
+        if not hasattr(self, '_periodic_learning_count'):
+            self._periodic_learning_count = 0
+        
+        self._periodic_learning_count += 1
+        if self._periodic_learning_count >= 8:  # Every 2 hours
+            if self.ai_learning_layer and self.ai_rules_engine:
+                try:
+                    closed_trades = self.trade_journal.get_closed_trades(limit=50)
+                    if len(closed_trades) >= 5:
+                        logger.info(f"🧠 Periodic learning check: Analyzing {len(closed_trades)} closed trades...")
+                        learning_result = self.ai_learning_layer.analyze_recent_trades(limit=50)
+                        
+                        if learning_result.get('recommendations'):
+                            logger.info(f"💡 Learning update: {len(learning_result['recommendations'])} recommendations found")
+                            filter_result = self.ai_learning_layer.apply_recommended_filters()
+                            if filter_result:
+                                self.ai_rules_engine._load_adaptive_filters()
+                                logger.info("✅ Adaptive filters refreshed during periodic scan")
+                except Exception as e:
+                    logger.debug(f"Periodic learning check failed: {e}")
+            
+            self._periodic_learning_count = 0
         
         # Skip on weekends
         if now.weekday() >= 5:
             logger.info("Weekend - skipping periodic scan")
+            return
+        
+        # Skip outside market hours
+        current_time = now.time()
+        market_open = dt_time(9, 15)
+        market_close = dt_time(15, 30)
+        
+        if not (market_open <= current_time <= market_close):
+            logger.debug("Outside market hours - skipping periodic scan")
             return
         
         logger.info("Running periodic scan (15 min interval)...")
@@ -2134,7 +2960,7 @@ Loss: -{loss_pct:.1f}%"""
             
             all_signals = []
             
-            from trade_journal import TradeJournal
+            from trade.trade_journal import TradeJournal
             
             if self.strategy in ['trend', 'all']:
                 trend_signals = self._get_trend_signals(stocks_data)
@@ -2263,7 +3089,14 @@ Loss: -{loss_pct:.1f}%"""
     def stop(self):
         """Stop the scanner."""
         self.scheduler.stop()
-        
+
+        # Update global scanner state for UI
+        try:
+            from api import scanner_state
+            scanner_state["running"] = False
+        except Exception as e:
+            logger.warning(f"Could not update scanner_state: {e}")
+
         # Only log shutdown info locally - DO NOT send to Telegram
         # Telegram should ONLY receive trading signals
         logger.info(f"NSE Trend Scanner stopped - Total scans: {self.total_scans}, Total signals: {self.total_signals}")
@@ -2387,7 +3220,7 @@ def run_scheduled(config: dict, logger):
     # Check if telegram_bot exists, otherwise use alert_service
     TelegramBot = None
     try:
-        from notifications.telegram_bot import TelegramBot
+        from notifications.telegram_bot import TelegramBot  # type: ignore
     except (ImportError, ModuleNotFoundError):
         pass
     
@@ -2483,16 +3316,35 @@ def main():
     
     # Handle --schedule mode (new combined scheduler + bot mode)
     if args.schedule:
-        # Load full config
+        # Load full config - try file first, then environment variables
         import json
+        config = None
         settings_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             'config/settings.json'
         )
-        with open(settings_path, 'r') as f:
-            config = json.load(f)
         
-        logger = logging.getLogger(__name__)
+        # Try to load from file
+        if os.path.exists(settings_path):
+            try:
+                with open(settings_path, 'r') as f:
+                    config = json.load(f)
+                logger.info(f"Loaded settings from {settings_path}")
+            except Exception as e:
+                logger.error(f"Error loading settings from file: {e}")
+        
+        # If no config from file, use environment variables
+        if config is None:
+            config = {
+                'telegram': {
+                    'bot_token': os.environ.get('TELEGRAM_BOT_TOKEN', ''),
+                    'chat_id': os.environ.get('TELEGRAM_CHAT_ID', ''),
+                    'channel_chat_id': os.environ.get('TELEGRAM_CHANNEL_CHAT_ID', '')
+                },
+                'stocks_file': os.environ.get('STOCKS_FILE', 'config/stocks.json')
+            }
+            logger.info("Using configuration from environment variables")
+        
         run_scheduled(config, logger)
         return
     
@@ -2506,12 +3358,51 @@ def main():
         strategy=args.strategy,
         enable_telegram_bot=args.enable_telegram_bot
     )
-    
+
+    # Initialize WatchlistManager
+    watchlist_manager = WatchlistManager(
+        data_dir='data',
+        data_fetcher=scanner.data_fetcher,
+        indicator_engine=scanner.indicator_engine
+    )
+    logger.info(f"WatchlistManager initialized: {watchlist_manager}, items: {len(watchlist_manager.watchlist)}")
+
+    # Initialize Flask API with scanner instances
+    try:
+        logger.info("Calling init_flask_api with watchlist_manager...")
+        init_flask_api(
+            trade_journal_inst=scanner.trade_journal,
+            data_fetcher_inst=scanner.data_fetcher,
+            market_scheduler_inst=scanner.scheduler,
+            performance_tracker_inst=scanner.performance_tracker,
+            history_manager_inst=scanner.history_manager,
+            watchlist_manager_inst=watchlist_manager
+        )
+        # Verify that watchlist_manager was actually set in the api module
+        import api
+        logger.info(f"After init: api.watchlist_manager = {api.watchlist_manager}")
+        if api.watchlist_manager is None:
+            raise RuntimeError("watchlist_manager global in api module is still None after init_api call")
+        logger.info("Flask API initialized with scanner components")
+    except Exception as e:
+        logger.exception("Failed to initialize API")  # Logs full traceback
+        # Re-raise to prevent starting broken server
+        raise
+
+    # Start Flask API in background thread
+    def run_api():
+        port = int(os.environ.get('PORT', 5050))
+        flask_app.run(debug=False, host='0.0.0.0', port=port, threaded=True)
+
+    api_thread = threading.Thread(target=run_api, daemon=True)
+    api_thread.start()
+    logger.info(f"Flask API started on port {os.environ.get('PORT', 5050)}")
+
     # Handle test modes
     if args.test:
         scanner.run_once()
         return
-    
+
     if args.test_telegram:
         success = scanner.test_telegram()
         if success:
@@ -2519,7 +3410,7 @@ def main():
         else:
             print("Telegram test failed!")
         return
-    
+
     # Start scanner
     scanner.start()
 

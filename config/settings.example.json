@@ -74,7 +74,20 @@
         "daily_signal_hour": 15,
         "max_signals_per_day": 5,
         "confidence_threshold": 7,
-        "deduplication_days": 5
+        "deduplication_days": 5,
+        "alert_hours": [11, 15]
+    },
+    "signal_validation": {
+        "enabled": true,
+        "min_score": 6.0,
+        "max_sl_percent": 0.05,
+        "min_rr_ratio": 1.5,
+        "require_trend_pattern": true,
+        "require_ai_validation": true,
+        "validate_technical_patterns": true,
+        "min_hh_ratio": 0.35,
+        "min_hl_ratio": 0.35,
+        "max_volatility": 0.15
     },
     "trade_filters": {
         "min_rr": 2.0,

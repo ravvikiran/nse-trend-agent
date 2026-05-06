@@ -1,8 +1,9 @@
-# NSE Trend Scanner Agent
+# NSE Trend Scanner Agent (Agentic AI v3.0)
 
-Automated trading scanner that monitors ~500 NSE stocks during market hours and detects potential uptrend starts based on EMA alignment and volume confirmation. Includes AI-powered stock analysis via two-way Telegram bot, Trade Journal System, Auto-Optimization Engine, and AI Learning Layer.
+Automated trading scanner that monitors ~500 NSE stocks during market hours and detects potential uptrend starts based on EMA alignment and volume confirmation. **Agentic AI v3.0** - the scanner is now a fully autonomous agent that makes its own decisions.
 
-**Latest Update:** 2026-04-13 - Fixed test commands and data fetching reliability
+**Version:** 3.0  
+**Latest Update:** 2026-04-14 - Agentic AI with autonomous decision-making
 
 ## Features
 
@@ -19,7 +20,7 @@ Automated trading scanner that monitors ~500 NSE stocks during market hours and 
 
 - **Smart Alerts**: Telegram notifications with entry, stop loss, targets, and confidence score
 - **Scheduled Scanning**: Runs every 15 minutes during market hours (09:15 - 15:30 IST)
-- **AI Analysis**: GPT-powered stock analysis with BUY/SELL/HOLD recommendations
+- **AI Analysis**: Multi-provider LLM (OpenAI, Anthropic, Groq, Gemini) stock analysis
 - **Two-way Telegram Bot**: Interactive bot - send stock symbols for instant analysis
 
 ### Learning & Optimization (v2.0)
@@ -37,6 +38,38 @@ Automated trading scanner that monitors ~500 NSE stocks during market hours and 
 - **Position Manager**: Trailing SL, partial exits at T1/T2
 - **Market Context**: ATR-based detection with volatility regimes (LOW/NORMAL/HIGH)
 - **Weekend Skip**: No signal generation on weekends
+
+### Agentic AI (v3.0) - Autonomous Agent
+
+The scanner is now a **Fully Autonomous Agent** powered by LLM that:
+
+- **Makes Decisions**: Uses LLM to analyze market conditions and decide whether to SCAN, WAIT, or ADJUST_STRATEGY
+- **Self-corrects**: Tracks win/loss streaks and automatically adjusts approach
+- **Explains Decisions**: Provides natural language reasoning for every action
+- **Adapts to Regime**: Classifies market as BULLISH/BEARISH/SIDEWAYS/VOLATILE and adjusts behavior
+- **Dynamic Scanning**: Can adjust scan intervals based on market conditions
+
+```
+Agent Loop (v3.0):
+1. Fetch market data (NIFTY, sectors, active trades)
+2. Analyze with LLM - decide action (SCAN/WAIT/ADJUST)
+3. Execute action or skip scan
+4. Track outcomes for self-correction
+5. Update agent state and provide explanation
+```
+
+**Agent Actions:**
+- `SCAN`: Execute normal signal scan
+- `WAIT`: Skip this scan cycle (market conditions unfavorable)
+- `ADJUST_STRATEGY`: Change strategy focus (e.g., more VERC in sideways)
+- `MONITOR`: Focus on existing positions instead of new signals
+- `ANALYZE`: Deep dive analysis on specific stocks
+
+**Market Regime Detection:**
+- BULLISH: Strong uptrend - maximize TREND signals
+- BEARISH: Strong downtrend - minimize signals, favor shorts
+- SIDEWAYS: Range-bound - favor VERC/MTF over TREND
+- VOLATILE: High volatility - reduce confidence, tighten SL
 
 ## System Flow
 
@@ -66,7 +99,21 @@ pip install -r requirements.txt
 
 ## Configuration
 
-### 1. Telegram Setup
+### 1. Agentic AI Setup (Optional)
+
+To enable full Agentic AI capabilities, set any LLM API key:
+
+```bash
+# Choose one (or multiple for fallback)
+export OPENAI_API_KEY=your_key          # GPT-4 (Recommended)
+export GROQ_API_KEY=your_key            # Fast, free tier available
+export ANTHROPIC_API_KEY=your_key       # Claude
+export GOOGLE_API_KEY=your_key         # Gemini
+```
+
+Without LLM, the agent falls back to rule-based decisions.
+
+### 2. Telegram Setup
 
 **Option A: Config File (Recommended)**
 Edit `config/settings.json`:
@@ -88,11 +135,11 @@ set TELEGRAM_BOT_TOKEN=your_bot_token
 set TELEGRAM_CHAT_ID=your_chat_id
 ```
 
-### 2. Stock List
+### 3. Stock List
 
 The stock list is configured in [`config/stocks.json`](config/stocks.json).
 
-### 3. AI Configuration (Optional)
+### 4. AI Configuration (Optional)
 
 To enable AI-powered stock analysis, set `OPENAI_API_KEY` environment variable.
 
@@ -141,6 +188,7 @@ nse-trend-agent/
 ├── src/
 │   ├── __init__.py
 │   ├── main.py              # Main entry point
+│   ├── agent_controller.py # Agentic AI - autonomous decision maker (v3.0)
 │   ├── data_fetcher.py      # Yahoo Finance data fetching
 │   ├── indicator_engine.py  # EMA, RSI, ATR calculations
 │   ├── trend_detector.py    # Trend detection logic
@@ -186,7 +234,7 @@ trade = {
 ## Adaptive Filters
 
 - **Too many false breakouts**: Increase volume_ratio (1.5 → 1.8)
-- **Late entries**: Tighten RSI (65 → 60)
+- **Late entries**: Tighten RSI (70 → 65)
 - **Dead stock**: Increase ATR minimum
 
 ## No-Trade Conditions
@@ -217,7 +265,7 @@ Insight:
 
 - **Scanning 500 stocks**: 10-30 seconds per scan
 - **Scan Interval**: Every 15 minutes during market hours
-- **Trade expiry**: 10-15 days
+- **Trade expiry**: 30 days
 
 ## Disclaimer
 
