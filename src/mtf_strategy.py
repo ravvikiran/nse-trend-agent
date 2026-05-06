@@ -532,7 +532,7 @@ class BreakoutDetector:
             support = swing_low
             
             if current_close > resistance:
-                min_breakout = resistance * 1.0015
+                min_breakout = resistance * 1.0005
                 if current_close < min_breakout:
                     return EntryAnalysis(
                         breakout_detected=False,
@@ -546,7 +546,7 @@ class BreakoutDetector:
                 if total_range > 0:
                     body_ratio = body_height / total_range
                     
-                    if body_ratio >= 0.4:
+                    if body_ratio >= 0.25:
                         return EntryAnalysis(
                             breakout_detected=True,
                             breakout_type="STRONG_BODY",
@@ -572,7 +572,7 @@ class BreakoutDetector:
             resistance = swing_low
             
             if current_close < support:
-                max_breakout = support * 0.9985
+                max_breakout = support * 0.9995
                 if current_close > max_breakout:
                     return EntryAnalysis(
                         breakout_detected=False,
@@ -586,7 +586,7 @@ class BreakoutDetector:
                 if total_range > 0:
                     body_ratio = body_height / total_range
                     
-                    if body_ratio >= 0.4:
+                    if body_ratio >= 0.25:
                         return EntryAnalysis(
                             breakout_detected=True,
                             breakout_type="STRONG_BODY",
@@ -934,17 +934,16 @@ class TradeValidator:
                 logger.info("REJECT: MISSING_EMA200 - ema_200 is None or missing")
                 return self.REJECT_MISSING_EMA200
         
-        # 2. STRICT: Stop loss percentage check (minimum 0.5%)
+        # 2. STRICT: Stop loss percentage check (minimum 0.25%)
         if entry_price > 0 and stop_loss > 0:
             sl_percent = self._calculate_stop_loss_percent(entry_price, stop_loss, signal_type)
-            if sl_percent < 0.5:
-                logger.info(f"REJECT: LOW_STOP_LOSS - sl_percent={sl_percent:.2f}% < 0.5%")
+            if sl_percent < 0.25:
+                logger.info(f"REJECT: LOW_STOP_LOSS - sl_percent={sl_percent:.2f}% < 0.25%")
                 return self.REJECT_LOW_STOP_LOSS
         
-        # 3. STRICT: Sideways market (no structure)
+        # 3. SOFT: Sideways market (no structure) - rely on confidence scoring instead
         if structure_status == "SIDEWAYS":
-            logger.info(f"REJECT: SIDEWAYS_MARKET - structure_status={structure_status}")
-            return self.REJECT_SIDEWAYS_MARKET
+            logger.info(f"SOFT: SIDEWAYS_MARKET - structure_status={structure_status}")
         
         # ========================================
         # SOFT FILTERS (reduce confidence, don't reject)
@@ -956,8 +955,8 @@ class TradeValidator:
             # This is handled in _calculate_confidence via caps
         
         # ATR: Will reduce score if low
-        if atr_percent < 0.5:
-            logger.info(f"SOFT: LOW_ATR - atr_percent={atr_percent:.2f}% < 0.5%, score -= 2")
+        if atr_percent < 0.3:
+            logger.info(f"SOFT: LOW_ATR - atr_percent={atr_percent:.2f}% < 0.3%, score -= 2")
         
         # ========================================
         # TREND CONSISTENCY: Only strict check on 1D, flexible on 1H
@@ -1032,21 +1031,21 @@ class TradeValidator:
         # CAP CONFIDENCE FOR WEAK CONDITIONS
         # ========================================
         
-        # Cap for weak volume (1.0x - 1.3x)
-        if volume_ratio < 1.3:
-            score = min(score, 6)
+        # Cap for weak volume (relax to cap at 7 if < 1.0)
+        if volume_ratio < 1.0:
+            score = min(score, 7)
         
         # Cap for sideways market
         if structure_status == "SIDEWAYS":
-            score = min(score, 5)
+            score = min(score, 6)
         
         # Cap for weak breakout
-        if breakout_type in ["WEAK_CANDLE", "WICK_ONLY"]:
-            score = min(score, 4)
+        if breakout_type in ["WEAKCANDLE", "WICK_ONLY", "WEAK_CANDLE"]:
+            score = min(score, 6)
         
         # Cap for low ATR
-        if atr_percent < 0.5:
-            score = min(score, 5)
+        if atr_percent < 0.3:
+            score = min(score, 6)
         
         return min(10, max(1, score))
 

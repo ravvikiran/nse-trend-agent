@@ -175,7 +175,7 @@ def is_strong_breakout(df: Optional[pd.DataFrame]) -> bool:
     
     breakout_strength = ((candle["close"] - high_20) / candle["close"]) * 100
     
-    is_strong = body_ratio > 0.6 and breakout_strength > 1.5
+    is_strong = body_ratio > 0.35 and breakout_strength > 0.5
     
     if not is_strong:
         logger.debug(f"Weak breakout: body_ratio={body_ratio:.2f}, strength={breakout_strength:.2f}")

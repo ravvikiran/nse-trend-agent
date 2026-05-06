@@ -2486,7 +2486,7 @@ def main():
         # Load full config
         import json
         settings_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             'config/settings.json'
         )
         with open(settings_path, 'r') as f:
