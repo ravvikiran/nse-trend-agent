@@ -175,13 +175,8 @@ def is_strong_breakout(df: Optional[pd.DataFrame]) -> bool:
     
     breakout_strength = ((candle["close"] - high_20) / candle["close"]) * 100
     
-<<<<<<< HEAD:src/consolidation_detector.py
     is_strong = body_ratio > 0.35 and breakout_strength > 0.5
-    
-=======
-    is_strong = body_ratio >= 0.5 and breakout_strength >= 1.0
 
->>>>>>> d7aa6f8b90fd4904cf216d001dbd76f762c602f4:src/core/consolidation_detector.py
     if not is_strong:
         logger.debug(f"Weak breakout: body_ratio={body_ratio:.2f}, strength={breakout_strength:.2f}")
     
