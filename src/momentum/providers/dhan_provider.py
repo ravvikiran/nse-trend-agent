@@ -138,8 +138,11 @@ class DhanDataProvider(DataProvider):
     ) -> Optional[pd.DataFrame]:
         """Fetch OHLCV data for a single symbol from Dhan.
 
-        For intraday timeframes (15m, 1h): fetches 1-minute data and resamples.
-        For daily timeframe: fetches daily candles directly.
+        For 15m timeframe: fetches intraday data with 15-min interval.
+        For 1h timeframe: fetches intraday 60-min data (limited to ~5 days).
+            If more periods are needed than intraday can provide, falls back
+            to daily data as a proxy.
+        For 1d timeframe: fetches daily candles directly.
 
         Args:
             symbol: NSE stock symbol (e.g., 'RELIANCE', 'TCS', 'NIFTY 50')
@@ -164,7 +167,11 @@ class DhanDataProvider(DataProvider):
             return None
 
         try:
-            if timeframe in _INTRADAY_TIMEFRAMES:
+            if timeframe == "1h" and periods > 30:
+                # Dhan intraday only provides ~5 days = ~30 hourly candles.
+                # For large period requests (e.g., EMA 200), use daily data instead.
+                df = await self._fetch_daily(symbol, security_id, periods)
+            elif timeframe in _INTRADAY_TIMEFRAMES:
                 df = await self._fetch_intraday(symbol, security_id, timeframe, periods)
             else:
                 df = await self._fetch_daily(symbol, security_id, periods)
@@ -178,9 +185,10 @@ class DhanDataProvider(DataProvider):
     async def fetch_batch(
         self, symbols: list[str], timeframe: str, periods: int
     ) -> Dict[str, pd.DataFrame]:
-        """Fetch OHLCV data for multiple symbols concurrently with batching.
+        """Fetch OHLCV data for multiple symbols with sequential batching.
 
-        Processes symbols in batches of `batch_size` to avoid rate limits.
+        Processes symbols in batches of `batch_size` to avoid rate limits
+        and connection pool exhaustion.
 
         Args:
             symbols: List of NSE stock symbols
@@ -196,16 +204,11 @@ class DhanDataProvider(DataProvider):
         for batch_start in range(0, len(symbols), self.batch_size):
             batch = symbols[batch_start: batch_start + self.batch_size]
 
-            tasks = [
-                self._fetch_single_safe(symbol, timeframe, periods)
-                for symbol in batch
-            ]
-            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            for symbol, result in zip(batch, batch_results):
-                if isinstance(result, Exception):
-                    logger.debug("Batch fetch failed for %s: %s", symbol, result)
-                elif result is not None:
+            # Process each symbol sequentially within a batch to avoid
+            # overwhelming the connection pool
+            for symbol in batch:
+                result = await self._fetch_single_safe(symbol, timeframe, periods)
+                if result is not None:
                     results[symbol] = result
 
             # Small delay between batches to respect rate limits
@@ -231,28 +234,31 @@ class DhanDataProvider(DataProvider):
     async def _fetch_intraday(
         self, symbol: str, security_id: str, timeframe: str, periods: int
     ) -> Optional[pd.DataFrame]:
-        """Fetch intraday data and resample to the requested timeframe.
+        """Fetch intraday data at the requested timeframe directly.
 
-        Dhan provides 1-minute candle data for the last 5 trading days.
-        We resample to 15m or 1h as needed.
+        Dhan's intraday_minute_data supports interval parameter (1, 5, 15, 25, 60)
+        for the last 5 trading days.
 
         Args:
             symbol: Stock symbol for logging.
             security_id: Dhan security ID.
             timeframe: '15m' or '1h'.
-            periods: Number of resampled candles needed.
+            periods: Number of candles needed.
 
         Returns:
-            Resampled OHLCV DataFrame or None.
+            OHLCV DataFrame or None.
         """
         # Determine exchange segment and instrument type
         exchange_segment, instrument_type = self._get_segment_info(symbol)
+
+        # Map timeframe to Dhan interval parameter
+        interval = 60 if timeframe == "1h" else 15
 
         # Calculate date range (last 5 trading days for intraday)
         to_date = datetime.now().strftime("%Y-%m-%d")
         from_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
 
-        # Fetch 1-minute data with retry
+        # Fetch data with the interval parameter
         data = await self._run_with_retry(
             self._dhan.intraday_minute_data,
             security_id,
@@ -260,6 +266,7 @@ class DhanDataProvider(DataProvider):
             instrument_type,
             from_date,
             to_date,
+            interval,
         )
 
         if data is None or data.get("status") != "success":
@@ -272,13 +279,6 @@ class DhanDataProvider(DataProvider):
 
         # Convert to DataFrame
         df = self._candles_to_dataframe(candles)
-        if df is None or df.empty:
-            return None
-
-        # Resample to requested timeframe
-        resample_rule = "15min" if timeframe == "15m" else "60min"
-        df = self._resample_ohlcv(df, resample_rule)
-
         if df is None or df.empty:
             return None
 
@@ -339,51 +339,51 @@ class DhanDataProvider(DataProvider):
         """Load and cache the security list from Dhan for symbol lookups.
 
         Maps trading symbols to Dhan security IDs.
-        Dhan provides a CSV-based instrument list. The SDK's fetch_security_list
-        may return a DataFrame, a file path, or raw data depending on version.
-        We also support downloading the CSV directly as a fallback.
+        Dhan's fetch_security_list is a static method that downloads a CSV
+        and returns a pandas DataFrame.
         """
         try:
-            # Try SDK method first
-            data = await self._run_with_retry(
-                self._dhan.fetch_security_list, "compact"
-            )
+            # fetch_security_list is a static method that downloads CSV and returns DataFrame
+            # It saves to 'security_id_list.csv' in the current directory
+            loop = asyncio.get_event_loop()
+
+            def _fetch():
+                from dhanhq import dhanhq as DhanHQ
+                try:
+                    df = DhanHQ.fetch_security_list("compact")
+                    return df
+                except Exception as e:
+                    logger.debug("SDK fetch_security_list failed: %s", e)
+                    return None
+
+            data = await loop.run_in_executor(None, _fetch)
 
             df = None
 
-            if data is None:
-                logger.warning("SDK fetch_security_list returned None, trying direct CSV download")
-                df = await self._download_security_csv()
-            elif isinstance(data, pd.DataFrame):
+            if isinstance(data, pd.DataFrame) and not data.empty:
                 df = data
-            elif isinstance(data, str):
-                # SDK may return a file path to the downloaded CSV
+                logger.debug(
+                    "fetch_security_list returned DataFrame with %d rows, columns: %s",
+                    len(df), list(df.columns)[:10]
+                )
+            else:
+                # Try reading the CSV file that fetch_security_list may have saved
                 import os
-                if os.path.isfile(data):
+                csv_path = "security_id_list.csv"
+                if os.path.isfile(csv_path):
                     try:
-                        df = pd.read_csv(data)
+                        df = pd.read_csv(csv_path)
+                        logger.debug("Read security list from saved CSV: %d rows", len(df))
                     except Exception as e:
-                        logger.debug("Failed to read CSV from path %s: %s", data, e)
-                else:
-                    # Maybe it's raw CSV content
-                    from io import StringIO
-                    try:
-                        df = pd.read_csv(StringIO(data))
-                    except Exception:
-                        pass
-            elif isinstance(data, dict):
-                # Some SDK versions return dict with 'data' key
-                if "data" in data and isinstance(data["data"], list):
-                    df = pd.DataFrame(data["data"])
-            elif isinstance(data, list):
-                df = pd.DataFrame(data)
+                        logger.debug("Failed to read saved CSV: %s", e)
 
-            # If we still don't have a DataFrame, try direct download
-            if df is None or (isinstance(df, pd.DataFrame) and df.empty):
-                logger.debug("Trying direct CSV download as fallback")
+            # If SDK method didn't work, download directly
+            if df is None or df.empty:
+                logger.info("Trying direct CSV download from Dhan CDN...")
                 df = await self._download_security_csv()
 
             if df is not None and not df.empty:
+                logger.debug("Security DataFrame columns: %s", list(df.columns))
                 self._parse_security_dataframe(df)
             else:
                 logger.warning("Could not load security list, using fallback mappings")
