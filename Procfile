@@ -1,1 +1,1 @@
-worker: python -m src.momentum.main
+web: python -m src.momentum.main
