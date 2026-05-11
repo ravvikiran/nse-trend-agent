@@ -1,4 +1,4 @@
-# NSE Momentum Scanner - Requirements
+# QuantGridIndia — NSE Momentum Scanner - Requirements
 
 # Broker API (Dhan - free for account holders)
 dhanhq>=2.2.0

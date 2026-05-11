@@ -90,9 +90,15 @@ def renew_dhan_token() -> Optional[str]:
             return None
 
         # Extract access token from response
-        # Response format may vary — handle both dict and direct string
+        # Dhan API returns camelCase keys (e.g. "accessToken")
+        # but handle snake_case too for forward compatibility
         if isinstance(token_data, dict):
-            access_token = token_data.get("access_token") or token_data.get("data", {}).get("access_token")
+            access_token = (
+                token_data.get("accessToken")
+                or token_data.get("access_token")
+                or token_data.get("data", {}).get("accessToken")
+                or token_data.get("data", {}).get("access_token")
+            )
         elif isinstance(token_data, str):
             access_token = token_data
         else:

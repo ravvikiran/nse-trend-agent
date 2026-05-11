@@ -1,4 +1,4 @@
-# NSE Momentum Scanner
+# QuantGridIndia — NSE Momentum Scanner
 
 Deterministic, rule-based momentum scanner for ~500 NSE stocks. Scans every 2 minutes during market hours using a three-stage filtering pipeline and delivers structured Telegram alerts for the top 5 momentum stocks.
 
@@ -37,8 +37,8 @@ Deterministic, rule-based momentum scanner for ~500 NSE stocks. Scans every 2 mi
 
 ```bash
 # Clone and install
-git clone <repository-url>
-cd nse-trend-agent
+git clone https://github.com/YOUR_USERNAME/QuantGridIndia.git
+cd QuantGridIndia
 pip install -r requirements.txt
 
 # Run with mock data (no broker needed)
@@ -115,7 +115,7 @@ The scanner automatically renews the Dhan access token every morning at 09:00 IS
 ## Project Structure
 
 ```
-nse-trend-agent/
+QuantGridIndia/
 ├── config/
 │   ├── momentum_scanner.json      # Scanner configuration
 │   └── nifty500_universe.json     # NIFTY 500 stock universe

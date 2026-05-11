@@ -1,7 +1,7 @@
-# NSE Momentum Scanner
+# QuantGridIndia — NSE Momentum Scanner
 
 """
-NSE Momentum Scanner — Deterministic rule-based momentum scanning for NSE stocks.
+QuantGridIndia — Deterministic rule-based momentum scanning for NSE stocks.
 
 Scans ~500 NSE stocks every 2 minutes during market hours using a three-stage
 filtering pipeline (1H trend → relative strength → 15m entry triggers) and

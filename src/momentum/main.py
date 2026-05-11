@@ -1,5 +1,5 @@
 """
-NSE Momentum Scanner — Main Entry Point
+QuantGridIndia — Main Entry Point
 
 Wires all pipeline components together and runs the scan scheduler.
 Supports standalone execution via:
@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="NSE Momentum Scanner — rule-based intraday momentum detection"
+        description="QuantGridIndia — rule-based intraday momentum detection"
     )
     parser.add_argument(
         "--mock",
@@ -292,13 +292,13 @@ async def run_scanner(args: argparse.Namespace) -> None:
             signal.signal(sig, lambda s, f: _shutdown_handler())
 
     # Step 9: Run the scheduler
-    logger.info("NSE Momentum Scanner started. Press Ctrl+C to stop.")
+    logger.info("QuantGridIndia started. Press Ctrl+C to stop.")
     try:
         await scheduler.run()
     finally:
         # Clean up data provider connection
         await data_provider.disconnect()
-        logger.info("NSE Momentum Scanner stopped.")
+        logger.info("QuantGridIndia stopped.")
 
 
 async def _try_renew_dhan_token() -> Optional[str]:
@@ -327,7 +327,7 @@ def main() -> None:
     setup_logging(log_level=args.log_level, log_file=args.log_file)
 
     logger.info("=" * 60)
-    logger.info("NSE Momentum Scanner — Starting")
+    logger.info("QuantGridIndia — Starting")
     logger.info("=" * 60)
 
     try:
