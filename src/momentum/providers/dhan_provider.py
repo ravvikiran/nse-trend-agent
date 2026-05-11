@@ -167,11 +167,7 @@ class DhanDataProvider(DataProvider):
             return None
 
         try:
-            if timeframe == "1h" and periods > 30:
-                # Dhan intraday only provides ~5 days = ~30 hourly candles.
-                # For large period requests (e.g., EMA 200), use daily data instead.
-                df = await self._fetch_daily(symbol, security_id, periods)
-            elif timeframe in _INTRADAY_TIMEFRAMES:
+            if timeframe in _INTRADAY_TIMEFRAMES:
                 df = await self._fetch_intraday(symbol, security_id, timeframe, periods)
             else:
                 df = await self._fetch_daily(symbol, security_id, periods)
@@ -200,6 +196,8 @@ class DhanDataProvider(DataProvider):
             Only symbols with valid data are included in the result.
         """
         results: Dict[str, pd.DataFrame] = {}
+        failed_count = 0
+        no_security_id_count = 0
 
         for batch_start in range(0, len(symbols), self.batch_size):
             batch = symbols[batch_start: batch_start + self.batch_size]
@@ -207,13 +205,35 @@ class DhanDataProvider(DataProvider):
             # Process each symbol sequentially within a batch to avoid
             # overwhelming the connection pool
             for symbol in batch:
+                # Quick check: does this symbol have a security_id?
+                if self._get_security_id(symbol) is None:
+                    no_security_id_count += 1
+                    continue
+
                 result = await self._fetch_single_safe(symbol, timeframe, periods)
                 if result is not None:
                     results[symbol] = result
+                else:
+                    failed_count += 1
 
             # Small delay between batches to respect rate limits
             if batch_start + self.batch_size < len(symbols):
                 await asyncio.sleep(0.5)
+
+        if no_security_id_count > 0:
+            logger.warning(
+                "Batch fetch: %d/%d symbols had no security_id mapping",
+                no_security_id_count, len(symbols)
+            )
+        if failed_count > 0:
+            logger.warning(
+                "Batch fetch: %d symbols failed to return data (timeframe=%s)",
+                failed_count, timeframe
+            )
+        logger.info(
+            "Batch fetch complete: %d/%d symbols returned data (timeframe=%s)",
+            len(results), len(symbols), timeframe
+        )
 
         return results
 
@@ -226,7 +246,10 @@ class DhanDataProvider(DataProvider):
     ) -> Optional[pd.DataFrame]:
         """Fetch a single symbol's data, catching exceptions for batch use."""
         try:
-            return await self.fetch_ohlcv(symbol, timeframe, periods)
+            result = await self.fetch_ohlcv(symbol, timeframe, periods)
+            if result is None:
+                logger.debug("fetch_ohlcv returned None for %s (%s)", symbol, timeframe)
+            return result
         except Exception as e:
             logger.debug("Error fetching %s in batch: %s", symbol, e)
             return None
@@ -254,9 +277,17 @@ class DhanDataProvider(DataProvider):
         # Map timeframe to Dhan interval parameter
         interval = 60 if timeframe == "1h" else 15
 
-        # Calculate date range (last 5 trading days for intraday)
+        # Calculate date range
+        # Dhan allows up to 90 days per request for intraday data
+        # For 1h (210 periods): ~35 trading days = ~50 calendar days
+        # For 15m (40 periods): ~2 trading days = ~4 calendar days
+        if timeframe == "1h":
+            lookback_days = min(90, max(50, periods // 6 * 2))
+        else:
+            lookback_days = 7  # 5 trading days for 15m
+
         to_date = datetime.now().strftime("%Y-%m-%d")
-        from_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        from_date = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
 
         # Fetch data with the interval parameter
         data = await self._run_with_retry(
@@ -269,11 +300,20 @@ class DhanDataProvider(DataProvider):
             interval,
         )
 
-        if data is None or data.get("status") != "success":
-            logger.debug("Intraday data fetch failed for %s: %s", symbol, data)
+        if data is None:
+            logger.debug("Intraday data fetch returned None for %s", symbol)
             return None
 
-        candles = data.get("data", [])
+        # Handle different response formats from the SDK
+        if isinstance(data, dict):
+            if "status" in data and data.get("status") != "success":
+                logger.debug("Intraday data fetch failed for %s: %s", symbol, data)
+                return None
+            candles = data.get("data", data)  # Use 'data' key if present, else use dict itself
+        else:
+            logger.debug("Unexpected intraday response type for %s: %s", symbol, type(data))
+            return None
+
         if not candles:
             return None
 
@@ -317,11 +357,22 @@ class DhanDataProvider(DataProvider):
             to_date,
         )
 
-        if data is None or data.get("status") != "success":
-            logger.debug("Daily data fetch failed for %s: %s", symbol, data)
+        if data is None:
+            logger.debug("Daily data fetch returned None for %s", symbol)
             return None
 
-        candles = data.get("data", [])
+        # Handle different response formats from the SDK
+        # Some versions wrap in {"status": "success", "data": {...}}
+        # Others return the data dict directly {"open": [...], "high": [...], ...}
+        if isinstance(data, dict):
+            if "status" in data and data.get("status") != "success":
+                logger.debug("Daily data fetch failed for %s: %s", symbol, data)
+                return None
+            candles = data.get("data", data)  # Use 'data' key if present, else use dict itself
+        else:
+            logger.debug("Unexpected response type for %s: %s", symbol, type(data))
+            return None
+
         if not candles:
             return None
 
@@ -676,7 +727,13 @@ class DhanDataProvider(DataProvider):
 
             # Handle timestamp
             if "timestamp" in df.columns:
-                df["timestamp"] = pd.to_datetime(df["timestamp"])
+                # Dhan returns epoch timestamps as integers (seconds since epoch)
+                # Check if values look like epoch timestamps (large integers)
+                sample = df["timestamp"].iloc[0] if len(df) > 0 else None
+                if sample is not None and isinstance(sample, (int, float)) and sample > 1_000_000_000:
+                    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
+                else:
+                    df["timestamp"] = pd.to_datetime(df["timestamp"])
             else:
                 # If no timestamp, create a synthetic one
                 df["timestamp"] = pd.date_range(

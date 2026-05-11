@@ -259,15 +259,20 @@ async def run_scanner(args: argparse.Namespace) -> None:
         logger.info("Pre-market: renewing Dhan access token...")
         token = await _try_renew_dhan_token()
         if token:
-            # Reconnect with the fresh token
-            await data_provider.disconnect()
-            reconnected = await data_provider.connect()
-            if reconnected:
-                logger.info("Pre-market: data provider reconnected with fresh token")
+            # Only reconnect if we got a genuinely new token
+            # (not just the existing one returned due to rate-limiting)
+            current_token = os.environ.get("DHAN_ACCESS_TOKEN", "")
+            if token != current_token or not data_provider.connected:
+                await data_provider.disconnect()
+                reconnected = await data_provider.connect()
+                if reconnected:
+                    logger.info("Pre-market: data provider reconnected with fresh token")
+                else:
+                    logger.error("Pre-market: failed to reconnect after token renewal")
             else:
-                logger.error("Pre-market: failed to reconnect after token renewal")
+                logger.info("Pre-market: token still valid, no reconnect needed")
         else:
-            logger.warning("Pre-market: token renewal skipped (no PIN/TOTP configured)")
+            logger.warning("Pre-market: token renewal failed, keeping existing connection")
 
     # Step 7: Create scheduler with scan callback + pre-market renewal
     scheduler = ScanScheduler(

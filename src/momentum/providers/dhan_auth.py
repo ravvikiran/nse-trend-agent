@@ -93,6 +93,17 @@ def renew_dhan_token() -> Optional[str]:
         # Dhan API returns camelCase keys (e.g. "accessToken")
         # but handle snake_case too for forward compatibility
         if isinstance(token_data, dict):
+            # Check for rate-limit or error response
+            if token_data.get("status") == "error":
+                msg = token_data.get("message", "Unknown error")
+                logger.warning("Dhan token generation rate-limited or failed: %s", msg)
+                # Return existing token if available (it's still valid)
+                existing = os.environ.get("DHAN_ACCESS_TOKEN")
+                if existing:
+                    logger.info("Using existing access token (still valid)")
+                    return existing
+                return None
+
             access_token = (
                 token_data.get("accessToken")
                 or token_data.get("access_token")
