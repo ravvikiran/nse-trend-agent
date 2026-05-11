@@ -339,41 +339,57 @@ class DhanDataProvider(DataProvider):
         """Load and cache the security list from Dhan for symbol lookups.
 
         Maps trading symbols to Dhan security IDs.
+        Dhan provides a CSV-based instrument list. The SDK's fetch_security_list
+        may return a DataFrame, a file path, or raw data depending on version.
+        We also support downloading the CSV directly as a fallback.
         """
         try:
-            # Dhan's fetch_security_list returns a CSV/dict of all instruments
+            # Try SDK method first
             data = await self._run_with_retry(
                 self._dhan.fetch_security_list, "compact"
             )
 
+            df = None
+
             if data is None:
-                logger.warning("Failed to fetch Dhan security list")
-                return
-
-            # The response format depends on SDK version
-            # For v2.2.0, it returns a dict with instrument data
-            if isinstance(data, dict) and "data" in data:
-                instruments = data["data"]
+                logger.warning("SDK fetch_security_list returned None, trying direct CSV download")
+                df = await self._download_security_csv()
+            elif isinstance(data, pd.DataFrame):
+                df = data
+            elif isinstance(data, str):
+                # SDK may return a file path to the downloaded CSV
+                import os
+                if os.path.isfile(data):
+                    try:
+                        df = pd.read_csv(data)
+                    except Exception as e:
+                        logger.debug("Failed to read CSV from path %s: %s", data, e)
+                else:
+                    # Maybe it's raw CSV content
+                    from io import StringIO
+                    try:
+                        df = pd.read_csv(StringIO(data))
+                    except Exception:
+                        pass
+            elif isinstance(data, dict):
+                # Some SDK versions return dict with 'data' key
+                if "data" in data and isinstance(data["data"], list):
+                    df = pd.DataFrame(data["data"])
             elif isinstance(data, list):
-                instruments = data
+                df = pd.DataFrame(data)
+
+            # If we still don't have a DataFrame, try direct download
+            if df is None or (isinstance(df, pd.DataFrame) and df.empty):
+                logger.debug("Trying direct CSV download as fallback")
+                df = await self._download_security_csv()
+
+            if df is not None and not df.empty:
+                self._parse_security_dataframe(df)
             else:
-                # Try to use it as-is if it's a DataFrame or similar
-                instruments = data
+                logger.warning("Could not load security list, using fallback mappings")
+                self._add_fallback_mappings()
 
-            # Build symbol -> security_id mapping for NSE equities
-            if isinstance(instruments, list):
-                for inst in instruments:
-                    if isinstance(inst, dict):
-                        sym = inst.get("tradingSymbol", "") or inst.get("SEM_TRADING_SYMBOL", "")
-                        sec_id = str(inst.get("securityId", "") or inst.get("SEM_SMST_SECURITY_ID", ""))
-                        exchange = inst.get("exchangeSegment", "") or inst.get("SEM_EXM_EXCH_ID", "")
-                        if sym and sec_id and exchange in ("NSE_EQ", "NSE", "IDX_I"):
-                            # Store without .NS suffix for matching
-                            clean_sym = sym.replace(".NS", "").replace("-EQ", "")
-                            self._security_list[clean_sym] = sec_id
-                            self._security_list[sym] = sec_id
-
-            # Add well-known index mappings
+            # Add well-known index mappings (always)
             self._security_list["NIFTY 50"] = "13"
             self._security_list["NIFTY BANK"] = "25"
             self._security_list["NIFTY IT"] = "10940"
@@ -388,8 +404,140 @@ class DhanDataProvider(DataProvider):
 
         except Exception as e:
             logger.error("Failed to load Dhan security list: %s", e)
-            # Add minimal hardcoded mappings as fallback
             self._add_fallback_mappings()
+
+    async def _download_security_csv(self) -> Optional[pd.DataFrame]:
+        """Download the Dhan security master CSV directly.
+
+        Returns:
+            DataFrame of instruments or None on failure.
+        """
+        import asyncio
+
+        def _download():
+            import urllib.request
+            url = "https://images.dhan.co/api-data/api-scrip-master.csv"
+            try:
+                with urllib.request.urlopen(url, timeout=30) as response:
+                    return pd.read_csv(response)
+            except Exception as e:
+                logger.debug("Direct CSV download failed: %s", e)
+                return None
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _download)
+
+    def _parse_security_dataframe(self, df: pd.DataFrame) -> None:
+        """Parse a security list DataFrame into the symbol -> security_id mapping.
+
+        Handles both compact and detailed CSV column naming conventions from Dhan.
+
+        Args:
+            df: DataFrame from Dhan's instrument CSV.
+        """
+        # Identify column names (Dhan uses different naming in compact vs detailed)
+        # Compact CSV columns: SEM_SMST_SECURITY_ID, SEM_TRADING_SYMBOL,
+        #                      SEM_EXM_EXCH_ID, SEM_SEGMENT, SM_SYMBOL_NAME, etc.
+        # Also handle: securityId, tradingSymbol, exchangeSegment (SDK dict format)
+
+        sec_id_col = None
+        symbol_col = None
+        exchange_col = None
+        segment_col = None
+
+        # Map possible column names
+        for col in df.columns:
+            col_lower = col.lower().replace(" ", "").replace("_", "")
+            if col_lower in ("semsmst securityid", "semsmstsecurityid", "securityid", "security_id"):
+                sec_id_col = col
+            elif col in ("SEM_SMST_SECURITY_ID",):
+                sec_id_col = col
+            elif col in ("SEM_TRADING_SYMBOL", "tradingSymbol", "TRADING_SYMBOL"):
+                symbol_col = col
+            elif col_lower in ("semtradingsymbol",):
+                symbol_col = col
+            elif col in ("SEM_EXM_EXCH_ID", "exchangeSegment", "EXCH_ID", "EXCHANGE"):
+                exchange_col = col
+            elif col_lower in ("semexmexchid",):
+                exchange_col = col
+            elif col in ("SEM_SEGMENT", "SEGMENT"):
+                segment_col = col
+            elif col_lower in ("semsegment",):
+                segment_col = col
+
+        # Try common column name patterns if not found
+        if sec_id_col is None:
+            for col in df.columns:
+                if "security" in col.lower() and "id" in col.lower():
+                    sec_id_col = col
+                    break
+
+        if symbol_col is None:
+            for col in df.columns:
+                if "trading" in col.lower() and "symbol" in col.lower():
+                    symbol_col = col
+                    break
+            if symbol_col is None:
+                for col in df.columns:
+                    if "symbol" in col.lower() and "name" not in col.lower():
+                        symbol_col = col
+                        break
+
+        if exchange_col is None:
+            for col in df.columns:
+                if "exch" in col.lower() and ("id" in col.lower() or "segment" in col.lower()):
+                    exchange_col = col
+                    break
+
+        if sec_id_col is None or symbol_col is None:
+            logger.warning(
+                "Could not identify required columns in security CSV. "
+                "Columns found: %s", list(df.columns)[:10]
+            )
+            return
+
+        logger.debug(
+            "Security CSV columns: sec_id=%s, symbol=%s, exchange=%s, segment=%s",
+            sec_id_col, symbol_col, exchange_col, segment_col,
+        )
+
+        # Filter for NSE equities only
+        if exchange_col:
+            nse_mask = df[exchange_col].astype(str).isin(["NSE", "NSE_EQ"])
+            if segment_col:
+                # Also include equity segment
+                eq_mask = df[segment_col].astype(str).isin(["E", "EQ", "EQUITY"])
+                filtered = df[nse_mask & eq_mask] if not eq_mask.all() else df[nse_mask]
+            else:
+                filtered = df[nse_mask]
+        else:
+            # No exchange column — use all rows
+            filtered = df
+
+        if filtered.empty:
+            # If filtering removed everything, try without segment filter
+            if exchange_col:
+                filtered = df[df[exchange_col].astype(str).isin(["NSE", "NSE_EQ"])]
+            if filtered.empty:
+                filtered = df
+
+        count = 0
+        for _, row in filtered.iterrows():
+            sym = str(row.get(symbol_col, "")).strip()
+            sec_id = str(row.get(sec_id_col, "")).strip()
+
+            if not sym or not sec_id or sec_id in ("", "nan", "None"):
+                continue
+
+            # Store multiple variations for flexible matching
+            clean_sym = sym.replace("-EQ", "").replace(".NS", "").strip()
+            if clean_sym:
+                self._security_list[clean_sym] = sec_id
+                self._security_list[f"{clean_sym}.NS"] = sec_id
+                self._security_list[sym] = sec_id
+                count += 1
+
+        logger.debug("Parsed %d NSE equity symbols from security CSV", count)
 
     def _add_fallback_mappings(self) -> None:
         """Add hardcoded security_id mappings for major NSE stocks as fallback."""
