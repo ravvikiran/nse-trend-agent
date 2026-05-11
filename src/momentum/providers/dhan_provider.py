@@ -67,12 +67,12 @@ class DhanDataProvider(DataProvider):
         batch_size: Number of symbols to fetch concurrently per batch.
     """
 
-    def __init__(self, batch_size: int = 50):
+    def __init__(self, batch_size: int = 10):
         """Initialize the Dhan data provider.
 
         Args:
             batch_size: Maximum number of concurrent symbol fetches per batch.
-                        Defaults to 50 to avoid API rate limits.
+                        Defaults to 10 to match urllib3 connection pool size.
         """
         self.connected: bool = False
         self.batch_size: int = batch_size
