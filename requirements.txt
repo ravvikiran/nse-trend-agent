@@ -1,37 +1,21 @@
-# NSE Trend Scanner Agent - Requirements
+# NSE Momentum Scanner - Requirements
 
-# Market Data
-yfinance>=0.2.36
-kiteconnect>=5.0.0
+# Broker API (Dhan - free for account holders)
 dhanhq>=2.2.0
+
+# Token auto-renewal (TOTP generation)
 pyotp>=2.9.0
 
 # Data Processing
 pandas>=2.0.0
+numpy>=1.24.0
 ta>=0.11.0
-
-# Scheduling
-schedule>=1.2.0
-APScheduler>=3.10.0
 
 # HTTP Requests (for Telegram API)
 requests>=2.31.0
 
-# Telegram Bot
-python-telegram-bot>=20.0
-
-# Logging
+# Environment variable loading
 python-dotenv>=1.0.0
 
 # Date/Time utilities
 pytz>=2023.3
-
-# Web Framework & UI
-flask>=2.3.0
-flask-cors>=4.0.0
-
-# AI/LLM Integration (Multi-Provider)
-openai>=1.0.0
-anthropic>=0.25.0
-google-genai>=0.1.0
-groq>=0.4.0

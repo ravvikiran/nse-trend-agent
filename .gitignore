@@ -35,6 +35,7 @@ ENV/
 logs/
 *.log
 data/
+*.db
 
 # Config (use settings.example.json as template)
 config/settings.json

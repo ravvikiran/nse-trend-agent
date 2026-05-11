@@ -17,7 +17,7 @@ from src.momentum.models import ScannerConfig
 logger = logging.getLogger(__name__)
 
 DEFAULT_UNIVERSE_PATH = "config/nifty500_universe.json"
-DEFAULT_PENNY_STOCK_THRESHOLD = 10.0
+DEFAULT_PENNY_STOCK_THRESHOLD = 50.0
 
 
 @dataclass

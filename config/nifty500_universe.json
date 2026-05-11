@@ -2,7 +2,7 @@
     "description": "NIFTY 500 stock universe for momentum scanner",
     "source": "NSE NIFTY 500 Index Constituents",
     "last_updated": "2025-01-01",
-    "penny_stock_threshold": 10.0,
+    "penny_stock_threshold": 50.0,
     "symbols": [
         "360ONE.NS",
         "3MINDIA.NS",

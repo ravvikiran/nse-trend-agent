@@ -119,6 +119,23 @@ class Stage3EntryTrigger:
             )
             return None
 
+        # RSI filter: RSI(14) must be between 50 and 80 (momentum zone, not overbought)
+        rsi = self._calculate_rsi(df_15m)
+        if rsi is not None:
+            if rsi < 50 or rsi > 80:
+                logger.debug(
+                    "RSI %.1f outside momentum zone [50, 80], excluding", rsi
+                )
+                return None
+
+        # ATR minimum filter: ATR(14) must be > 1% of price (avoid dead stocks)
+        atr_pct = self._calculate_atr_percentage(df_15m)
+        if atr_pct is not None and atr_pct < 1.0:
+            logger.debug(
+                "ATR %.2f%% below 1%% of price (dead stock), excluding", atr_pct
+            )
+            return None
+
         return result
 
     def _check_pullback_continuation(
@@ -443,3 +460,73 @@ class Stage3EntryTrigger:
             return False
 
         return len(df) >= self.MIN_CANDLES
+
+    def _calculate_rsi(self, df: pd.DataFrame, period: int = 14) -> Optional[float]:
+        """Calculate RSI(14) for the latest candle.
+
+        Args:
+            df: OHLCV DataFrame with 'close' column.
+            period: RSI period (default 14).
+
+        Returns:
+            RSI value (0-100), or None if insufficient data.
+        """
+        if len(df) < period + 1:
+            return None
+
+        try:
+            close = df["close"]
+            delta = close.diff()
+            gain = delta.where(delta > 0, 0.0).rolling(window=period).mean()
+            loss = (-delta.where(delta < 0, 0.0)).rolling(window=period).mean()
+
+            latest_gain = gain.iloc[-1]
+            latest_loss = loss.iloc[-1]
+
+            if pd.isna(latest_gain) or pd.isna(latest_loss):
+                return None
+
+            if latest_loss == 0:
+                return 100.0
+
+            rs = latest_gain / latest_loss
+            rsi = 100.0 - (100.0 / (1.0 + rs))
+            return float(rsi)
+
+        except Exception:
+            return None
+
+    def _calculate_atr_percentage(self, df: pd.DataFrame) -> Optional[float]:
+        """Calculate ATR(14) as a percentage of the current price.
+
+        Used to filter out "dead stocks" that barely move.
+        ATR% = (ATR / current_price) × 100
+
+        Args:
+            df: OHLCV DataFrame with high, low, close columns.
+
+        Returns:
+            ATR as percentage of price, or None if insufficient data.
+        """
+        if len(df) < self.atr_period + 1:
+            return None
+
+        try:
+            atr_indicator = AverageTrueRange(
+                high=df["high"], low=df["low"], close=df["close"],
+                window=self.atr_period,
+            )
+            atr_series = atr_indicator.average_true_range()
+            atr_value = atr_series.iloc[-1]
+
+            if pd.isna(atr_value) or atr_value <= 0:
+                return None
+
+            current_price = df["close"].iloc[-1]
+            if current_price <= 0:
+                return None
+
+            return float((atr_value / current_price) * 100.0)
+
+        except Exception:
+            return None

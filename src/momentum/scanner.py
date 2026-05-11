@@ -209,6 +209,9 @@ class MomentumScanner:
                     [], 0, True, rejected_reasons
                 )
 
+            # Step 6b: Data staleness check — remove stocks with stale data (>30 min old)
+            stage1_15m_data = self._filter_stale_data(stage1_15m_data, now)
+
             skipped_15m = len(stage1_symbols) - len(stage1_15m_data)
             if skipped_15m > 0:
                 rejected_reasons["missing_15m_data"] = skipped_15m
@@ -342,6 +345,68 @@ class MomentumScanner:
         except Exception as e:
             logger.error(f"Failed to fetch 15m batch data: {e}")
             return {}
+
+    def _filter_stale_data(
+        self,
+        stocks_data: Dict[str, pd.DataFrame],
+        current_time: datetime,
+        max_age_minutes: int = 30,
+    ) -> Dict[str, pd.DataFrame]:
+        """Remove stocks whose latest candle is older than max_age_minutes.
+
+        This ensures we're not making decisions on stale/delayed data.
+
+        Args:
+            stocks_data: Dict of symbol -> DataFrame with 'timestamp' column.
+            current_time: Current IST datetime for comparison.
+            max_age_minutes: Maximum allowed age of the latest candle (default 30).
+
+        Returns:
+            Filtered dict with only stocks that have fresh data.
+        """
+        fresh_data: Dict[str, pd.DataFrame] = {}
+
+        for symbol, df in stocks_data.items():
+            if df is None or df.empty:
+                continue
+
+            # Check if DataFrame has a timestamp column
+            if "timestamp" not in df.columns:
+                # No timestamp to check — include it (can't verify freshness)
+                fresh_data[symbol] = df
+                continue
+
+            try:
+                latest_timestamp = pd.to_datetime(df["timestamp"].iloc[-1])
+
+                # Make timezone-aware if naive
+                if latest_timestamp.tzinfo is None:
+                    latest_timestamp = latest_timestamp.replace(tzinfo=IST)
+
+                # Compare with current time
+                age = current_time - latest_timestamp
+                age_minutes = age.total_seconds() / 60
+
+                if age_minutes <= max_age_minutes:
+                    fresh_data[symbol] = df
+                else:
+                    logger.debug(
+                        "%s: data is stale (%.0f min old, max %d min). Excluding.",
+                        symbol, age_minutes, max_age_minutes,
+                    )
+            except Exception as e:
+                # If we can't parse the timestamp, include the stock anyway
+                logger.debug("%s: could not check staleness: %s", symbol, e)
+                fresh_data[symbol] = df
+
+        stale_count = len(stocks_data) - len(fresh_data)
+        if stale_count > 0:
+            logger.info(
+                "Staleness check: %d/%d stocks excluded (data older than %d min)",
+                stale_count, len(stocks_data), max_age_minutes,
+            )
+
+        return fresh_data
 
     async def _check_market_breadth(
         self,

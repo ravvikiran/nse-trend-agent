@@ -1,272 +1,197 @@
-# NSE Trend Scanner Agent (Agentic AI v3.0)
+# NSE Momentum Scanner
 
-Automated trading scanner that monitors ~500 NSE stocks during market hours and detects potential uptrend starts based on EMA alignment and volume confirmation. **Agentic AI v3.0** - the scanner is now a fully autonomous agent that makes its own decisions.
+Deterministic, rule-based momentum scanner for ~500 NSE stocks. Scans every 2 minutes during market hours using a three-stage filtering pipeline and delivers structured Telegram alerts for the top 5 momentum stocks.
 
-**Version:** 3.0  
-**Latest Update:** 2026-04-14 - Agentic AI with autonomous decision-making
+**Broker:** Dhan (free API for account holders)  
+**Deployment:** Railway (worker process)  
+**Alerts:** Telegram
 
-## Features
-
-### Core Scanning
-
-- **Stock Universe**: Monitors 500+ NSE stocks (NIFTY 50, NEXT 50, MIDCAP 150, SMALLCAP 250)
-- **Real-time Data**: Uses Yahoo Finance for 1-day (1D) OHLCV data
-- **Technical Indicators**: EMA 20, 50, 100, 200 + Volume MA 30 + RSI + ATR
-- **Trend Detection**: Identifies EMA alignment (EMA20 > EMA50 > EMA100 > EMA200) with volume confirmation
-- **VERC Strategy**: Volume Expansion Range Compression - detects accumulation before breakout
-- **MTF Strategy**: Multi-timeframe confirmation (1D, 1H, 15m) for stronger signals
-
-### Smart Features
-
-- **Smart Alerts**: Telegram notifications with entry, stop loss, targets, and confidence score
-- **Scheduled Scanning**: Runs every 15 minutes during market hours (09:15 - 15:30 IST)
-- **AI Analysis**: Multi-provider LLM (OpenAI, Anthropic, Groq, Gemini) stock analysis
-- **Two-way Telegram Bot**: Interactive bot - send stock symbols for instant analysis
-
-### Learning & Optimization (v2.0)
-
-- **Trade Journal**: Logs EVERY alert with complete trade data (entry, SL, targets, outcome, RR, indicators)
-- **Strategy Performance Tracker**: Tracks win rate, avg RR, drawdown, holding time per strategy
-- **Auto-Optimization Engine**: Automatically adjusts strategy weights based on performance
-- **Adaptive Filters**: Dynamically adjusts volume_ratio and RSI thresholds
-- **No-Trade Filter**: Avoids signals when ATR too low, choppy candles, or NIFTY unclear
-- **AI Learning Layer** (Strict Mode): Analyzes journal, detects failure patterns, suggests improvements
-
-### Additional Features (v2.1)
-
-- **Performance Analyzer**: Setup-level analysis with win rate, returns, profit factor
-- **Position Manager**: Trailing SL, partial exits at T1/T2
-- **Market Context**: ATR-based detection with volatility regimes (LOW/NORMAL/HIGH)
-- **Weekend Skip**: No signal generation on weekends
-
-### Agentic AI (v3.0) - Autonomous Agent
-
-The scanner is now a **Fully Autonomous Agent** powered by LLM that:
-
-- **Makes Decisions**: Uses LLM to analyze market conditions and decide whether to SCAN, WAIT, or ADJUST_STRATEGY
-- **Self-corrects**: Tracks win/loss streaks and automatically adjusts approach
-- **Explains Decisions**: Provides natural language reasoning for every action
-- **Adapts to Regime**: Classifies market as BULLISH/BEARISH/SIDEWAYS/VOLATILE and adjusts behavior
-- **Dynamic Scanning**: Can adjust scan intervals based on market conditions
+## How It Works
 
 ```
-Agent Loop (v3.0):
-1. Fetch market data (NIFTY, sectors, active trades)
-2. Analyze with LLM - decide action (SCAN/WAIT/ADJUST)
-3. Execute action or skip scan
-4. Track outcomes for self-correction
-5. Update agent state and provide explanation
+500 stocks → 1H Trend Filter → RS Ranking → 15m Entry Triggers → Top 5 Alerts
 ```
 
-**Agent Actions:**
-- `SCAN`: Execute normal signal scan
-- `WAIT`: Skip this scan cycle (market conditions unfavorable)
-- `ADJUST_STRATEGY`: Change strategy focus (e.g., more VERC in sideways)
-- `MONITOR`: Focus on existing positions instead of new signals
-- `ANALYZE`: Deep dive analysis on specific stocks
+### Pipeline Stages
 
-**Market Regime Detection:**
-- BULLISH: Strong uptrend - maximize TREND signals
-- BEARISH: Strong downtrend - minimize signals, favor shorts
-- SIDEWAYS: Range-bound - favor VERC/MTF over TREND
-- VOLATILE: High volatility - reduce confidence, tighten SL
+1. **Stage 1 — Trend Filter (1H):** Filters for bullish EMA alignment (price > EMA200, EMA20 > EMA50, positive slope)
+2. **Stage 2 — Relative Strength:** Ranks survivors by performance vs NIFTY (intraday 50% + 1-day 30% + 5-day 20%)
+3. **Stage 3 — Entry Triggers (15m):** Detects Pullback Continuation or Compression Breakout patterns
+4. **Final Ranking:** Weighted scoring → selects top 5 stocks
+5. **Alerts:** Sends structured Telegram messages with entry, SL, targets, and scores
 
-## System Flow
+### Setup Types
 
-```
-Scan → Detect → Score → Rank → Select → Alert → Log → Track → Optimize
-```
+| Type | Pattern |
+|------|---------|
+| 🟢 Pullback Continuation | Price near EMA(20) + bullish candle + volume > 1.5x + breaks prev high |
+| 🔵 Compression Breakout | 3-6 tight candles + ATR contraction + volume expansion + strong breakout |
 
-### Rank Score Formula (v2.1 - PURE Scoring)
+### Market Safety
 
-```
-rank_score = (strategy_score * 0.6) + (volume_score * 0.2) + (breakout_strength * 0.2)
-```
+- **Market Breadth Filter:** Suppresses all signals when declining > advancing by 1.5x AND NIFTY < EMA(20)
+- **Deduplication:** 30-min cooldown per stock, max 20 alerts/day
+- **NSE Holiday Calendar:** No scans on weekends or market holidays
 
-**Note:** Score is PURE - strategy_weight only affects sorting/ranking, not the numeric score.
-
-## Installation
+## Quick Start
 
 ```bash
+# Clone and install
 git clone <repository-url>
 cd nse-trend-agent
-
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
 pip install -r requirements.txt
+
+# Run with mock data (no broker needed)
+python -m src.momentum.main --mock
+
+# Run with Dhan (production)
+python -m src.momentum.main
 ```
 
 ## Configuration
 
-### 1. Agentic AI Setup (Optional)
+### Environment Variables
 
-To enable full Agentic AI capabilities, set any LLM API key:
+Create a `.env` file in the project root:
 
-```bash
-# Choose one (or multiple for fallback)
-export OPENAI_API_KEY=your_key          # GPT-4 (Recommended)
-export GROQ_API_KEY=your_key            # Fast, free tier available
-export ANTHROPIC_API_KEY=your_key       # Claude
-export GOOGLE_API_KEY=your_key         # Gemini
+```env
+# Dhan Broker (free for account holders)
+DHAN_CLIENT_ID=your_client_id
+DHAN_PIN=your_trading_pin
+DHAN_TOTP_SECRET=your_totp_base32_secret
+
+# Telegram Alerts
+TELEGRAM_BOT_TOKEN=your_bot_token
+TELEGRAM_CHAT_ID=your_chat_id
 ```
 
-Without LLM, the agent falls back to rule-based decisions.
+### Getting Your Credentials
 
-### 2. Telegram Setup
+**Dhan:**
+1. Create account at [dhan.co](https://dhan.co)
+2. Enable API at [dhanhq.co](https://dhanhq.co)
+3. Your client ID is in your Dhan app profile
+4. Your TOTP secret is the base32 key from authenticator setup (not the 6-digit code)
 
-**Option A: Config File (Recommended)**
-Edit `config/settings.json`:
+**Telegram:**
+1. Message [@BotFather](https://t.me/BotFather) → `/newbot` → copy the token
+2. Message your bot, then visit `https://api.telegram.org/bot<TOKEN>/getUpdates` to get your chat ID
+
+### Scanner Configuration
+
+Edit `config/momentum_scanner.json`:
 
 ```json
 {
-  "telegram": {
-    "bot_token": "YOUR_BOT_TOKEN_HERE",
-    "chat_id": "YOUR_CHAT_ID_HERE"
-  }
+    "scan_interval_seconds": 120,
+    "ema_fast": 20,
+    "ema_medium": 50,
+    "ema_slow": 200,
+    "volume_expansion_threshold": 1.5,
+    "max_alerts_per_day": 20,
+    "cooldown_period_seconds": 1800,
+    "min_breakout_strength": 40.0,
+    "batch_size": 50
 }
 ```
 
-**Option B: Environment Variables**
+## Railway Deployment
 
-```bash
-# On Windows
-set TELEGRAM_BOT_TOKEN=your_bot_token
-set TELEGRAM_CHAT_ID=your_chat_id
-```
+1. Connect your GitHub repo to Railway
+2. Set environment variables in Railway dashboard → Variables:
 
-### 3. Stock List
+| Variable | Description |
+|----------|-------------|
+| `DHAN_CLIENT_ID` | Your Dhan client ID |
+| `DHAN_PIN` | Your 4-6 digit trading PIN |
+| `DHAN_TOTP_SECRET` | Base32 TOTP secret from authenticator setup |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token from @BotFather |
+| `TELEGRAM_CHAT_ID` | Your Telegram chat ID |
 
-The stock list is configured in [`config/stocks.json`](config/stocks.json).
+3. Deploy — the scanner auto-starts as a worker process
 
-### 4. AI Configuration (Optional)
-
-To enable AI-powered stock analysis, set `OPENAI_API_KEY` environment variable.
-
-## Usage
-
-### Start Scanner (Runs every 15 minutes during market hours)
-
-```bash
-python -m src.main
-python -m src.main --test              # Single scan test
-python -m src.main --test-telegram     # Test Telegram connection
-python -m src.main --mock-alerts       # Test with mock alerts
-```
-
-### Run Specific Strategy
-
-```bash
-python -m src.main --strategy trend   # Only Trend Detection
-python -m src.main --strategy verc    # Only VERC
-python -m src.main --strategy all     # All strategies (default)
-```
-
-### Enable Telegram Bot
-
-```bash
-python -m src.main --enable-telegram-bot
-```
-
-### Telegram Bot Commands
-
-| Command             | Description                               |
-| ------------------- | ----------------------------------------- |
-| `RELIANCE`          | Send stock symbol for instant AI analysis |
-| `/analyze RELIANCE` | AI-powered stock analysis                 |
-| `/trend HDFCBANK`   | Technical trend analysis                  |
-| `/status`           | Check scanner status                      |
+The scanner automatically renews the Dhan access token every morning at 09:00 IST using PIN + TOTP. No manual intervention needed.
 
 ## Project Structure
 
 ```
 nse-trend-agent/
 ├── config/
-│   ├── settings.json         # Telegram and scanner settings
-│   └── stocks.json          # Stock list configuration
-├── data/                    # Data storage (trade journal, history)
+│   ├── momentum_scanner.json      # Scanner configuration
+│   └── nifty500_universe.json     # NIFTY 500 stock universe
+├── data/                          # SQLite scan logs (auto-created)
 ├── src/
-│   ├── __init__.py
-│   ├── main.py              # Main entry point
-│   ├── agent_controller.py # Agentic AI - autonomous decision maker (v3.0)
-│   ├── data_fetcher.py      # Yahoo Finance data fetching
-│   ├── indicator_engine.py  # EMA, RSI, ATR calculations
-│   ├── trend_detector.py    # Trend detection logic
-│   ├── volume_compression.py # VERC strategy
-│   ├── mtf_strategy.py      # Multi-timeframe strategy
-│   ├── alert_service.py    # Telegram alerts
-│   ├── scheduler.py        # Market hours scheduling
-│   ├── trade_journal.py    # Trade logging system
-│   ├── strategy_optimizer.py # Performance tracker + auto-opt
-│   └── ai_learning_layer.py # AI analysis (strict mode)
-├── logs/                    # Log files
-├── requirements.txt
+│   └── momentum/
+│       ├── main.py                # Entry point (CLI)
+│       ├── scanner.py             # Pipeline orchestrator
+│       ├── models.py              # Data models & config
+│       ├── config_manager.py      # Configuration loader
+│       ├── data_provider.py       # Abstract broker interface
+│       ├── telegram_service.py    # Telegram message delivery
+│       ├── stage1_trend_filter.py # 1H EMA trend filter
+│       ├── stage2_relative_strength.py  # RS ranking vs NIFTY
+│       ├── stage3_entry_trigger.py      # 15m entry detection
+│       ├── final_ranker.py        # Weighted scoring & top-5
+│       ├── trade_levels.py        # Entry, SL, targets
+│       ├── deduplicator.py        # Alert throttling
+│       ├── alert_formatter.py     # Telegram message formatting
+│       ├── market_breadth_filter.py     # Market health check
+│       ├── sector_analyzer.py     # Sector performance
+│       ├── scan_scheduler.py      # Market hours scheduling
+│       ├── scan_logger.py         # SQLite persistence
+│       ├── universe_manager.py    # Stock universe management
+│       └── providers/
+│           ├── dhan_provider.py   # Dhan broker API
+│           ├── dhan_auth.py       # Auto token renewal (PIN+TOTP)
+│           ├── kite_provider.py   # Zerodha Kite (alternative)
+│           └── mock_provider.py   # Mock data for testing
+├── tests/momentum/                # Unit tests
+├── logs/                          # Log files (auto-created)
+├── .env.example                   # Environment variable template
+├── .env.railway                   # Railway deployment template
+├── Procfile                       # Railway process definition
+├── requirements.txt               # Python dependencies
 └── README.md
 ```
 
-## Trade Journal Data Model
-
-```python
-trade = {
-  trade_id,
-  symbol,
-  strategy,            # TREND / VERC / MTF
-  entry,
-  stop_loss,
-  targets,
-  timestamp,
-  outcome,             # WIN / LOSS / OPEN / TIMEOUT
-  rr_achieved,
-  max_drawdown,
-  volume_ratio,
-  rsi,
-  trend_score,
-  verc_score,
-  rank_score
-}
-```
-
-## Auto-Optimization Rules
-
-- **Win rate < 40%**: Reduce strategy_weight
-- **Win rate > 60%**: Increase strategy_weight
-
-## Adaptive Filters
-
-- **Too many false breakouts**: Increase volume_ratio (1.5 → 1.8)
-- **Late entries**: Tighten RSI (70 → 65)
-- **Dead stock**: Increase ATR minimum
-
-## No-Trade Conditions
-
-Avoid signals when:
-
-- ATR very low (dead stock)
-- Choppy candles (wick > body)
-- NIFTY unclear direction (SIDEWAYS)
-
-## AI Learning Layer (Strict Mode)
-
-AI does NOT control signals. AI role:
-
-- Analyze journal data
-- Detect failure patterns
-- Suggest parameter improvements
-
-Example output:
+## CLI Options
 
 ```
-Insight:
-- TREND failing in low volume stocks
-- Suggest increasing volume threshold
+python -m src.momentum.main [OPTIONS]
+
+Options:
+  --mock        Use mock data (no broker API needed)
+  --config PATH Path to config JSON (default: config/momentum_scanner.json)
+  --log-level   Console log level: DEBUG, INFO, WARNING, ERROR (default: INFO)
+  --log-file    Log file path (default: logs/momentum_scanner.log)
 ```
 
-## Performance
+## Alert Format
 
-- **Scanning 500 stocks**: 10-30 seconds per scan
-- **Scan Interval**: Every 15 minutes during market hours
-- **Trade expiry**: 30 days
+```
+🟢 MOMENTUM SIGNAL
+
+Symbol: RELIANCE
+Setup: Pullback Continuation
+Timeframe: 15m
+
+🎯 Trade Levels
+  Entry: ₹2,500.00
+  Stop Loss: ₹2,450.00
+  ⚠️ Risk: 2.00%
+  Target 1: ₹2,550.00
+  Target 2: ₹2,600.00
+
+📊 Scores
+  Relative Volume: 2.1x
+  Relative Strength: 3.50
+  Sector Strength: 5.00
+  Trend Score: 75.0/100
+  Rank Score: 82.5/100
+
+⏰ 2024-01-15 10:30 IST
+```
 
 ## Disclaimer
 
-This software is for educational purposes only. Trading in financial markets involves substantial risk. Always do your own research.
+This software is for educational purposes only. Trading in financial markets involves substantial risk. Always do your own research and never risk more than you can afford to lose.

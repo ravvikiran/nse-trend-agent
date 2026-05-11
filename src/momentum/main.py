@@ -191,7 +191,12 @@ def build_scanner(config: ScannerConfig, data_provider: DataProvider) -> Momentu
     # Support components
     final_ranker = FinalRanker(config)
     deduplicator = Deduplicator(config)
-    alert_formatter = AlertFormatter(alert_service=None)  # No Telegram in standalone mode
+
+    # Telegram integration
+    from src.momentum.telegram_service import TelegramService
+    telegram = TelegramService()
+    alert_formatter = AlertFormatter(alert_service=telegram)
+
     market_breadth_filter = MarketBreadthFilter(config)
     sector_analyzer = SectorAnalyzer(config)
     trade_level_calculator = TradeLevelCalculator(config)

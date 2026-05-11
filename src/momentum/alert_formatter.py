@@ -1,7 +1,7 @@
 """Alert formatting and delivery for the NSE Momentum Scanner.
 
 Formats MomentumSignal data into structured Telegram messages with emoji
-indicators and delivers them via the existing AlertService.
+indicators and delivers them via TelegramService.
 Also formats and sends end-of-day (EOD) reports summarizing daily scan activity.
 """
 
@@ -17,7 +17,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 
 class AlertFormatter:
-    """Formats MomentumSignal into Telegram messages and sends via AlertService.
+    """Formats MomentumSignal into Telegram messages and sends via TelegramService.
 
     Uses Markdown formatting with emoji indicators for signal quality.
     All 14 required fields are included in the formatted output.
