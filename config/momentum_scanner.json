@@ -1,0 +1,42 @@
+{
+    "ema_fast": 20,
+    "ema_medium": 50,
+    "ema_slow": 200,
+    "ema_slope_lookback": 5,
+
+    "atr_period": 14,
+    "atr_sl_multiplier": 1.2,
+
+    "volume_ma_period": 30,
+    "volume_expansion_threshold": 1.5,
+
+    "rs_intraday_weight": 0.5,
+    "rs_1day_weight": 0.3,
+    "rs_5day_weight": 0.2,
+
+    "rank_relative_volume_weight": 0.35,
+    "rank_breakout_strength_weight": 0.25,
+    "rank_trend_quality_weight": 0.20,
+    "rank_distance_weight": 0.10,
+    "rank_sector_weight": 0.10,
+
+    "scan_interval_seconds": 120,
+    "market_open": "09:15",
+    "market_close": "15:30",
+    "pre_market_time": "09:00",
+
+    "cooldown_period_seconds": 1800,
+    "max_alerts_per_day": 20,
+
+    "min_liquidity_value": 10000000,
+    "min_daily_volume": 100000,
+    "max_gap_pct": 5.0,
+    "min_breakout_strength": 40.0,
+    "breadth_decline_ratio": 1.5,
+
+    "sector_boost_pct": 5.0,
+
+    "max_scan_duration_seconds": 60,
+    "warn_scan_duration_seconds": 90,
+    "batch_size": 50
+}
