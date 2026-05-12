@@ -198,6 +198,7 @@ class DhanDataProvider(DataProvider):
         results: Dict[str, pd.DataFrame] = {}
         failed_count = 0
         no_security_id_count = 0
+        first_failure_logged = False
 
         for batch_start in range(0, len(symbols), self.batch_size):
             batch = symbols[batch_start: batch_start + self.batch_size]
@@ -215,6 +216,13 @@ class DhanDataProvider(DataProvider):
                     results[symbol] = result
                 else:
                     failed_count += 1
+                    # Log the first failure at WARNING level for diagnostics
+                    if not first_failure_logged:
+                        diag = await self._fetch_with_diagnostics(symbol, timeframe, periods)
+                        logger.warning(
+                            "First fetch failure diagnostic: %s", diag
+                        )
+                        first_failure_logged = True
 
             # Small delay between batches to respect rate limits
             if batch_start + self.batch_size < len(symbols):
@@ -247,12 +255,56 @@ class DhanDataProvider(DataProvider):
         """Fetch a single symbol's data, catching exceptions for batch use."""
         try:
             result = await self.fetch_ohlcv(symbol, timeframe, periods)
-            if result is None:
-                logger.debug("fetch_ohlcv returned None for %s (%s)", symbol, timeframe)
             return result
         except Exception as e:
             logger.debug("Error fetching %s in batch: %s", symbol, e)
             return None
+
+    async def _fetch_with_diagnostics(
+        self, symbol: str, timeframe: str, periods: int
+    ) -> Optional[dict]:
+        """Fetch raw API response for a single symbol for diagnostic purposes.
+
+        Used to log the actual Dhan API response when all fetches are failing.
+        """
+        security_id = self._get_security_id(symbol)
+        if security_id is None:
+            return {"error": "no_security_id"}
+
+        exchange_segment, instrument_type = self._get_segment_info(symbol)
+        interval = 60 if timeframe == "1h" else 15
+
+        if timeframe in _INTRADAY_TIMEFRAMES:
+            if timeframe == "1h":
+                lookback_days = min(90, max(50, periods // 6 * 2))
+            else:
+                lookback_days = 7
+            to_date = datetime.now().strftime("%Y-%m-%d")
+            from_date = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+
+            try:
+                data = await self._run_with_retry(
+                    self._dhan.intraday_minute_data,
+                    security_id, exchange_segment, instrument_type,
+                    from_date, to_date, interval,
+                )
+                return {"symbol": symbol, "security_id": security_id, "response": str(data)[:500]}
+            except Exception as e:
+                return {"symbol": symbol, "security_id": security_id, "exception": str(e)}
+        else:
+            to_date = datetime.now().strftime("%Y-%m-%d")
+            lookback_days = min(periods * 2, 730)
+            from_date = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+
+            try:
+                data = await self._run_with_retry(
+                    self._dhan.historical_daily_data,
+                    security_id, exchange_segment, instrument_type,
+                    from_date, to_date,
+                )
+                return {"symbol": symbol, "security_id": security_id, "response": str(data)[:500]}
+            except Exception as e:
+                return {"symbol": symbol, "security_id": security_id, "exception": str(e)}
 
     async def _fetch_intraday(
         self, symbol: str, security_id: str, timeframe: str, periods: int
@@ -307,7 +359,7 @@ class DhanDataProvider(DataProvider):
         # Handle different response formats from the SDK
         if isinstance(data, dict):
             if "status" in data and data.get("status") != "success":
-                logger.debug("Intraday data fetch failed for %s: %s", symbol, data)
+                logger.debug("Intraday fetch failed for %s (id=%s): %s", symbol, security_id, data)
                 return None
             candles = data.get("data", data)  # Use 'data' key if present, else use dict itself
         else:
