@@ -18,11 +18,9 @@ Requirements: 13.1, 17.1, 18.1
 import argparse
 import asyncio
 import logging
-import os
 import signal
 import sys
 from pathlib import Path
-from typing import Optional
 
 # Ensure project root is on sys.path for both execution modes
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -131,9 +129,7 @@ def create_data_provider(use_mock: bool, config: ScannerConfig) -> DataProvider:
 
     Priority order:
       1. --mock flag → MockDataProvider
-      2. DHAN_CLIENT_ID + DHAN_ACCESS_TOKEN → DhanDataProvider
-      3. KITE_API_KEY + KITE_ACCESS_TOKEN → KiteDataProvider
-      4. Fallback → MockDataProvider with warning
+      2. Default → YahooFinanceProvider (free, no API key needed)
 
     Args:
         use_mock: If True, use MockDataProvider regardless of environment.
@@ -148,29 +144,11 @@ def create_data_provider(use_mock: bool, config: ScannerConfig) -> DataProvider:
         logger.info("Using MockDataProvider (--mock flag)")
         return MockDataProvider(seed=42)
 
-    # Check if Dhan credentials are available (preferred)
-    if os.environ.get("DHAN_CLIENT_ID") and os.environ.get("DHAN_ACCESS_TOKEN"):
-        from src.momentum.providers.dhan_provider import DhanDataProvider
+    # Default: Yahoo Finance (free, no credentials needed)
+    from src.momentum.providers.yahoo_provider import YahooFinanceProvider
 
-        logger.info("Using DhanDataProvider (Dhan credentials found)")
-        return DhanDataProvider(batch_size=config.batch_size)
-
-    # Check if Kite credentials are available
-    if os.environ.get("KITE_API_KEY") and os.environ.get("KITE_ACCESS_TOKEN"):
-        from src.momentum.providers.kite_provider import KiteDataProvider
-
-        logger.info("Using KiteDataProvider (Kite credentials found)")
-        return KiteDataProvider(batch_size=config.batch_size)
-
-    # Fallback to mock if no broker credentials
-    from src.momentum.providers.mock_provider import MockDataProvider
-
-    logger.warning(
-        "No broker API credentials found. "
-        "Set DHAN_CLIENT_ID + DHAN_ACCESS_TOKEN (or KITE_API_KEY + KITE_ACCESS_TOKEN). "
-        "Falling back to MockDataProvider."
-    )
-    return MockDataProvider(seed=42)
+    logger.info("Using YahooFinanceProvider (free, no API key required)")
+    return YahooFinanceProvider(batch_size=config.batch_size)
 
 
 def build_scanner(config: ScannerConfig, data_provider: DataProvider) -> MomentumScanner:
@@ -236,52 +214,25 @@ async def run_scanner(args: argparse.Namespace) -> None:
     config = config_manager.load()
     logger.info("Configuration loaded (scan_interval=%ds)", config.scan_interval_seconds)
 
-    # Step 2: Attempt token renewal if Dhan PIN + TOTP are available
-    # This handles the case where the scanner starts fresh (e.g., Railway redeploy)
-    # and needs a new token before connecting.
-    await _try_renew_dhan_token()
-
-    # Step 3: Create data provider
+    # Step 2: Create data provider
     data_provider = create_data_provider(use_mock=args.mock, config=config)
 
-    # Step 4: Connect to data provider
+    # Step 3: Connect to data provider
     connected = await data_provider.connect()
     if not connected:
         logger.error("Failed to connect to data provider. Exiting.")
         return
 
-    # Step 5: Build the scanner pipeline
+    # Step 4: Build the scanner pipeline
     scanner = build_scanner(config, data_provider)
 
-    # Step 6: Create pre-market callback (renews token + reconnects daily)
-    async def pre_market_callback():
-        """Renew Dhan token and reconnect data provider each morning."""
-        logger.info("Pre-market: renewing Dhan access token...")
-        token = await _try_renew_dhan_token()
-        if token:
-            # Only reconnect if we got a genuinely new token
-            # (not just the existing one returned due to rate-limiting)
-            current_token = os.environ.get("DHAN_ACCESS_TOKEN", "")
-            if token != current_token or not data_provider.connected:
-                await data_provider.disconnect()
-                reconnected = await data_provider.connect()
-                if reconnected:
-                    logger.info("Pre-market: data provider reconnected with fresh token")
-                else:
-                    logger.error("Pre-market: failed to reconnect after token renewal")
-            else:
-                logger.info("Pre-market: token still valid, no reconnect needed")
-        else:
-            logger.warning("Pre-market: token renewal failed, keeping existing connection")
-
-    # Step 7: Create scheduler with scan callback + pre-market renewal
+    # Step 5: Create scheduler with scan callback
     scheduler = ScanScheduler(
         config=config,
         scan_callback=scanner.run_cycle,
-        pre_market_callback=pre_market_callback,
     )
 
-    # Step 8: Register graceful shutdown handlers
+    # Step 6: Register graceful shutdown handlers
     loop = asyncio.get_running_loop()
 
     def _shutdown_handler() -> None:
@@ -296,7 +247,7 @@ async def run_scanner(args: argparse.Namespace) -> None:
             # Windows doesn't support add_signal_handler; use signal.signal fallback
             signal.signal(sig, lambda s, f: _shutdown_handler())
 
-    # Step 9: Run the scheduler
+    # Step 7: Run the scheduler
     logger.info("QuantGridIndia started. Press Ctrl+C to stop.")
     try:
         await scheduler.run()
@@ -304,26 +255,6 @@ async def run_scanner(args: argparse.Namespace) -> None:
         # Clean up data provider connection
         await data_provider.disconnect()
         logger.info("QuantGridIndia stopped.")
-
-
-async def _try_renew_dhan_token() -> Optional[str]:
-    """Attempt to renew Dhan token if PIN and TOTP secret are configured.
-
-    Returns:
-        New access token string, or None if renewal was skipped or failed.
-    """
-    if not os.environ.get("DHAN_PIN") or not os.environ.get("DHAN_TOTP_SECRET"):
-        return None
-
-    try:
-        from src.momentum.providers.dhan_auth import renew_dhan_token
-
-        loop = asyncio.get_event_loop()
-        token = await loop.run_in_executor(None, renew_dhan_token)
-        return token
-    except Exception as e:
-        logger.error("Token renewal attempt failed: %s", e)
-        return None
 
 
 def main() -> None:
