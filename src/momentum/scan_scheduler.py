@@ -201,101 +201,71 @@ class ScanScheduler:
         logger.debug("Sleeping %.1f seconds until %s IST", sleep_seconds, target_time.strftime("%H:%M"))
         await asyncio.sleep(sleep_seconds)
 
-    async def _wait_for_next_market_day(self) -> None:
-        """Sleep until the pre-market time of the next valid market day."""
-        now = self._now_ist()
-        next_day = now.date() + timedelta(days=1)
-
-        # Find the next market day (skip weekends and holidays)
-        while not self.is_market_day(next_day):
-            next_day += timedelta(days=1)
-
-        # Calculate sleep until pre-market time on the next market day
-        target_dt = datetime(
-            next_day.year, next_day.month, next_day.day,
-            self.pre_market_time.hour, self.pre_market_time.minute,
-            tzinfo=IST,
-        )
-        sleep_seconds = (target_dt - now).total_seconds()
-
-        if sleep_seconds > 0:
-            logger.info(
-                "Next market day: %s. Sleeping %.1f hours.",
-                next_day.isoformat(),
-                sleep_seconds / 3600,
-            )
-            await asyncio.sleep(sleep_seconds)
-
     async def run(self) -> None:
-        """Main async loop: run scan cycles during market hours.
+        """Run scan cycles during market hours, then exit.
 
-        This method runs indefinitely, executing the following daily flow:
-        1. Wait for a valid market day
-        2. At 09:00 IST: perform pre-market preparation
+        Designed for cron-based deployment (e.g., Railway cron job):
+        - Cron starts the process at 09:00 IST on market days
+        - Process runs pre-market prep, then scans every 2 minutes
+        - Process exits after market close (15:30 IST)
+        - No compute charges outside market hours
+
+        Flow:
+        1. Check if today is a market day — exit immediately if not
+        2. Perform pre-market preparation
         3. Wait until 09:30 IST (first 15m candle completes)
-        4. From 09:30 to 15:30 IST: execute scan cycles every 2 minutes
-        5. After 15:30 IST: wait for the next market day
-
-        The loop handles:
-        - Weekend skipping
-        - NSE holiday skipping
-        - Pre-market data loading
-        - First scan delay (09:30 IST)
-        - Graceful error handling per cycle
+        4. Execute scan cycles every 2 minutes until 15:30 IST
+        5. Exit cleanly after market close
         """
         self._running = True
+        now = self._now_ist()
+        today = now.date()
+        current_time = now.time()
+
         logger.info("ScanScheduler started. Scan interval: %ds", self.scan_interval_seconds)
+
+        # Check if today is a market day — exit if not
+        if not self.is_market_day(today):
+            logger.info(
+                "Today (%s) is not a market day. Exiting (cron will restart on next market day).",
+                today.isoformat(),
+            )
+            return
+
+        # If we're already past market close, exit
+        if current_time > self.market_close:
+            logger.info("Market already closed for today. Exiting.")
+            return
+
+        # Pre-market preparation
+        if current_time < self.first_scan_time:
+            await self._perform_pre_market()
+            # Wait until first scan time (09:30 IST)
+            await self._sleep_until(self.first_scan_time)
+
+        # Late start — still do pre-market if not done
+        if self._last_pre_market_date != today:
+            await self._perform_pre_market()
+
+        # Main scan loop: run until market close
+        logger.info("Entering scan loop (until %s IST)", self.market_close.strftime("%H:%M"))
 
         while self._running:
             now = self._now_ist()
-            today = now.date()
             current_time = now.time()
 
-            # Check if today is a market day
-            if not self.is_market_day(today):
-                logger.info("Today (%s) is not a market day. Waiting for next market day.", today.isoformat())
-                await self._wait_for_next_market_day()
-                continue
-
-            # If we're before pre-market time, sleep until pre-market
-            if current_time < self.pre_market_time:
-                await self._sleep_until(self.pre_market_time)
-                continue
-
-            # Pre-market preparation (09:00 - 09:15 IST)
-            if self._is_pre_market_time(current_time):
-                await self._perform_pre_market()
-                # Sleep until first scan time
-                await self._sleep_until(self.first_scan_time)
-                continue
-
-            # If we're past market close, wait for next market day
+            # Exit after market close
             if current_time > self.market_close:
-                logger.info("Market closed for today. Waiting for next market day.")
-                await self._wait_for_next_market_day()
-                continue
+                logger.info("Market closed (15:30 IST). Exiting process.")
+                break
 
-            # If we're between market open and first scan time, wait for first scan
-            if self.market_open <= current_time < self.first_scan_time:
-                # Perform pre-market if not done yet (e.g., scheduler started after 09:00)
-                if self._last_pre_market_date != today:
-                    await self._perform_pre_market()
-                await self._sleep_until(self.first_scan_time)
-                continue
+            # Execute scan cycle
+            await self._execute_scan_cycle()
 
-            # We're in the scan window (09:30 - 15:30 IST)
-            if self._is_after_first_scan_time(current_time) and self._is_during_market_hours(current_time):
-                # Perform pre-market if not done yet (late start scenario)
-                if self._last_pre_market_date != today:
-                    await self._perform_pre_market()
+            # Sleep for the scan interval
+            await asyncio.sleep(self.scan_interval_seconds)
 
-                await self._execute_scan_cycle()
-
-                # Sleep for the scan interval
-                await asyncio.sleep(self.scan_interval_seconds)
-            else:
-                # Shouldn't reach here, but handle gracefully
-                await asyncio.sleep(1)
+        logger.info("ScanScheduler finished for today.")
 
     def stop(self) -> None:
         """Stop the scheduler loop.

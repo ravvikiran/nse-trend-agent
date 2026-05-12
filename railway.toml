@@ -1,0 +1,4 @@
+[deploy]
+# Start at 09:00 IST (03:30 UTC) on weekdays
+# The process runs scans until 15:30 IST then exits on its own
+cronSchedule = "30 3 * * 1-5"
