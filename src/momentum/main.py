@@ -181,6 +181,10 @@ def build_scanner(config: ScannerConfig, data_provider: DataProvider) -> Momentu
     scan_logger = ScanLogger()
     universe_manager = UniverseManager(config)
 
+    # Trade journal for tracking open positions
+    from src.momentum.trade_journal import TradeJournal
+    trade_journal = TradeJournal(alert_service=telegram)
+
     # Load the stock universe on startup
     universe_manager.load_universe()
 
@@ -197,6 +201,7 @@ def build_scanner(config: ScannerConfig, data_provider: DataProvider) -> Momentu
         trade_level_calculator=trade_level_calculator,
         scan_logger=scan_logger,
         universe_manager=universe_manager,
+        trade_journal=trade_journal,
         config=config,
     )
 

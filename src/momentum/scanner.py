@@ -29,6 +29,7 @@ from src.momentum.sector_analyzer import SectorAnalyzer
 from src.momentum.stage1_trend_filter import Stage1TrendFilter
 from src.momentum.stage2_relative_strength import Stage2RelativeStrength
 from src.momentum.stage3_entry_trigger import Stage3EntryTrigger
+from src.momentum.trade_journal import TradeJournal
 from src.momentum.trade_levels import TradeLevelCalculator
 from src.momentum.universe_manager import UniverseManager
 
@@ -69,6 +70,7 @@ class MomentumScanner:
         trade_level_calculator: TradeLevelCalculator,
         scan_logger: ScanLogger,
         universe_manager: UniverseManager,
+        trade_journal: TradeJournal,
         config: ScannerConfig,
     ):
         """Initialize MomentumScanner with all pipeline dependencies.
@@ -86,6 +88,7 @@ class MomentumScanner:
             trade_level_calculator: Entry, SL, targets, trailing stop.
             scan_logger: SQLite persistence for scan cycles.
             universe_manager: Stock universe loading and filtering.
+            trade_journal: Trade journal for tracking open positions and SL/target hits.
             config: Scanner configuration parameters.
         """
         self.data_provider = data_provider
@@ -100,6 +103,7 @@ class MomentumScanner:
         self.trade_level_calculator = trade_level_calculator
         self.scan_logger = scan_logger
         self.universe_manager = universe_manager
+        self.trade_journal = trade_journal
         self.config = config
 
     async def run_cycle(self) -> ScanCycleResult:
@@ -156,6 +160,9 @@ class MomentumScanner:
             skipped_1h = len(universe) - len(stocks_1h_data)
             if skipped_1h > 0:
                 rejected_reasons["missing_1h_data"] = skipped_1h
+
+            # Step 2b: Check open trades in journal against current prices
+            await self._monitor_journal_trades()
 
             # Step 3: Stage 1 — Trend filter
             stage1_symbols = self.stage1_filter.filter(stocks_1h_data)
@@ -273,6 +280,8 @@ class MomentumScanner:
                     )
                     # Send alert (non-blocking, failure doesn't stop pipeline)
                     self._send_alert(signal)
+                    # Record in trade journal for tracking
+                    self._record_in_journal(signal)
                 else:
                     signals_suppressed += 1
 
@@ -724,6 +733,42 @@ class MomentumScanner:
             self.alert_formatter.send(signal)
         except Exception as e:
             logger.error(f"Alert send failed for {signal.symbol}: {e}")
+
+    def _record_in_journal(self, signal: MomentumSignal) -> None:
+        """Record a signal in the trade journal for tracking.
+
+        Args:
+            signal: MomentumSignal to record as an open trade.
+        """
+        try:
+            self.trade_journal.record_signal(signal)
+        except Exception as e:
+            logger.error(f"Failed to record signal in journal for {signal.symbol}: {e}")
+
+    async def _monitor_journal_trades(self) -> None:
+        """Fetch 15m data for open journal trades and check SL/target hits.
+
+        Runs every scan cycle to monitor active positions.
+        """
+        try:
+            open_trades = self.trade_journal.get_open_trades()
+            if not open_trades:
+                return
+
+            # Get symbols of open trades
+            journal_symbols = [t.symbol for t in open_trades]
+            logger.debug("Monitoring %d open trades in journal", len(journal_symbols))
+
+            # Fetch 15m data for journal symbols
+            price_data = await self.data_provider.fetch_batch(
+                journal_symbols, "15m", 5  # Only need recent candles for price check
+            )
+
+            if price_data:
+                self.trade_journal.check_open_trades(price_data)
+
+        except Exception as e:
+            logger.error(f"Journal trade monitoring failed: {e}")
 
     def _log_cycle(self, result: ScanCycleResult) -> None:
         """Log scan cycle to database. Failure is non-critical.
