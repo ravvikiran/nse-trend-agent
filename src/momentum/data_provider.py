@@ -1,9 +1,9 @@
 """
 Abstract DataProvider interface for broker API data fetching.
 
-Defines the contract for all concrete data provider implementations
-(Zerodha Kite, Angel One, Fyers, Upstox). The scanner uses this interface
-to fetch OHLCV data without coupling to any specific broker.
+Defines the contract for all concrete data provider implementations.
+The scanner uses this interface to fetch OHLCV data without coupling
+to any specific broker.
 """
 
 from abc import ABC, abstractmethod

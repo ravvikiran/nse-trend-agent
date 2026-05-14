@@ -2,7 +2,7 @@
 
 Deterministic, rule-based momentum scanner for ~500 NSE stocks. Scans every 2 minutes during market hours using a three-stage filtering pipeline and delivers structured Telegram alerts for the top 5 momentum stocks.
 
-**Broker:** Dhan (free API for account holders)  
+**Data Provider:** Yahoo Finance (free, no API key required)  
 **Deployment:** Railway (worker process)  
 **Alerts:** Telegram
 
@@ -44,7 +44,7 @@ pip install -r requirements.txt
 # Run with mock data (no broker needed)
 python -m src.momentum.main --mock
 
-# Run with Dhan (production)
+# Run with Yahoo Finance (production)
 python -m src.momentum.main
 ```
 
@@ -55,11 +55,6 @@ python -m src.momentum.main
 Create a `.env` file in the project root:
 
 ```env
-# Dhan Broker (free for account holders)
-DHAN_CLIENT_ID=your_client_id
-DHAN_PIN=your_trading_pin
-DHAN_TOTP_SECRET=your_totp_base32_secret
-
 # Telegram Alerts
 TELEGRAM_BOT_TOKEN=your_bot_token
 TELEGRAM_CHAT_ID=your_chat_id
@@ -67,11 +62,8 @@ TELEGRAM_CHAT_ID=your_chat_id
 
 ### Getting Your Credentials
 
-**Dhan:**
-1. Create account at [dhan.co](https://dhan.co)
-2. Enable API at [dhanhq.co](https://dhanhq.co)
-3. Your client ID is in your Dhan app profile
-4. Your TOTP secret is the base32 key from authenticator setup (not the 6-digit code)
+**Yahoo Finance:**
+No API key or credentials required. The scanner uses Yahoo Finance's public API.
 
 **Telegram:**
 1. Message [@BotFather](https://t.me/BotFather) → `/newbot` → copy the token
@@ -102,15 +94,10 @@ Edit `config/momentum_scanner.json`:
 
 | Variable | Description |
 |----------|-------------|
-| `DHAN_CLIENT_ID` | Your Dhan client ID |
-| `DHAN_PIN` | Your 4-6 digit trading PIN |
-| `DHAN_TOTP_SECRET` | Base32 TOTP secret from authenticator setup |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token from @BotFather |
 | `TELEGRAM_CHAT_ID` | Your Telegram chat ID |
 
 3. Deploy — the scanner auto-starts as a worker process
-
-The scanner automatically renews the Dhan access token every morning at 09:00 IST using PIN + TOTP. No manual intervention needed.
 
 ## Project Structure
 
@@ -141,9 +128,6 @@ QuantGridIndia/
 │       ├── scan_logger.py         # SQLite persistence
 │       ├── universe_manager.py    # Stock universe management
 │       └── providers/
-│           ├── dhan_provider.py   # Dhan broker API
-│           ├── dhan_auth.py       # Auto token renewal (PIN+TOTP)
-│           ├── kite_provider.py   # Zerodha Kite (alternative)
 │           └── mock_provider.py   # Mock data for testing
 ├── tests/momentum/                # Unit tests
 ├── logs/                          # Log files (auto-created)

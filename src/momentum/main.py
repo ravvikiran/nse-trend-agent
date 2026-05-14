@@ -7,7 +7,7 @@ Supports standalone execution via:
     python src/momentum/main.py
 
 CLI flags:
-    --mock      Use MockDataProvider instead of KiteDataProvider (for testing)
+    --mock      Use MockDataProvider instead of YahooFinanceProvider (for testing)
     --config    Path to config JSON file (default: config/momentum_scanner.json)
     --log-level Console log level (default: INFO)
     --log-file  Path to log file (default: logs/momentum_scanner.log)

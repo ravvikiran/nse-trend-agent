@@ -7,7 +7,7 @@ This design describes a deterministic, rule-based momentum scanner that continuo
 The scanner replaces the existing multi-strategy approach (Trend + VERC + MTF + Sentiment) with a focused, single-pipeline architecture optimized for early intraday trend detection. It reuses existing infrastructure (DataFetcher, AlertService, MarketScheduler, IndicatorEngine) while introducing new components for relative strength calculation, breakout detection, sector analysis, and market breadth filtering.
 
 **Key Design Decisions:**
-- **Broker API over Yahoo Finance**: The existing `DataFetcher` uses yfinance which has rate limits and ~15min delay. The new design abstracts data fetching behind a `DataProvider` interface to support Zerodha Kite, Angel One, Fyers, or Upstox APIs for near-live data.
+- **DataProvider abstraction**: The existing `DataFetcher` uses yfinance which has rate limits and ~15min delay. The new design abstracts data fetching behind a `DataProvider` interface to enable pluggable data sources (e.g., Yahoo Finance, broker APIs).
 - **Multi-timeframe pipeline**: Stage 1 (1H trend filter) → Stage 2 (relative strength ranking) → Stage 3 (15m entry triggers). Each stage progressively narrows the universe.
 - **2-minute scan cycles**: Much faster than the current 15-minute interval, requiring async batch fetching and efficient indicator caching.
 - **Deterministic output**: Same OHLCV inputs always produce the same ranked output. No AI/LLM in the signal path.
@@ -92,7 +92,7 @@ class DataProvider(ABC):
         pass
 ```
 
-Concrete implementations: `KiteDataProvider`, `AngelOneDataProvider`, `FyersDataProvider`, `UpstoxDataProvider`.
+Concrete implementations: `YahooFinanceProvider`, `MockDataProvider` (for testing). Additional broker-specific providers can be added by implementing the `DataProvider` interface.
 
 ### 2. ScanScheduler
 

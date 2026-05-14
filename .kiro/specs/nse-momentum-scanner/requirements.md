@@ -20,7 +20,7 @@ A deterministic, rule-based momentum trend scanner for NSE stocks. The system co
 - **Breakout_Strength**: A composite measure of candle body size, close proximity to high, range expansion, volume, and momentum acceleration
 - **Sector_Strength**: A measure of how strongly a stock's sector is outperforming NIFTY intraday
 - **Market_Breadth**: The ratio of advancing to declining stocks and overall market health indicators
-- **Data_Provider**: The broker API used for fetching NSE data (Zerodha Kite Connect, Angel One SmartAPI, Fyers API, or Upstox API)
+- **Data_Provider**: The market data source used for fetching NSE data (Yahoo Finance)
 - **Cooldown_Period**: The configurable time window during which duplicate alerts for the same stock are suppressed
 
 ## Requirements
@@ -31,7 +31,7 @@ A deterministic, rule-based momentum trend scanner for NSE stocks. The system co
 
 #### Acceptance Criteria
 
-1. THE Scanner SHALL use a broker API (Zerodha Kite Connect, Angel One SmartAPI, Fyers API, or Upstox API) as the Data_Provider for all market data
+1. THE Scanner SHALL use Yahoo Finance as the Data_Provider for all market data
 2. THE Scanner SHALL fetch OHLCV data in three timeframes: 15-minute candles for entry triggers, 1-hour candles for trend filtering, and daily candles for context
 3. WHEN a Scan_Cycle begins, THE Scanner SHALL use only the latest COMPLETED candle for all calculations
 4. THE Scanner SHALL fetch NIFTY 50 index data in matching timeframes for Relative_Strength and Market_Breadth calculations

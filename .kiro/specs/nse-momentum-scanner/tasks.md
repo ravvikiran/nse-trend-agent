@@ -258,13 +258,10 @@ Implement a deterministic, rule-based momentum scanner for ~500 NSE stocks using
     - **Validates: Requirements 2.2, 2.3, 2.4**
 
 - [x] 15. Implement Broker API DataProvider (Concrete Implementation)
-  - [x] 15.1 Implement at least one concrete DataProvider
-    - Create `src/momentum/providers/kite_provider.py` (or Angel One / Fyers / Upstox based on user preference)
-    - Implement `connect()`: authenticate with broker API using credentials from environment
-    - Implement `fetch_ohlcv()`: fetch OHLCV for single symbol in specified timeframe
-    - Implement `fetch_batch()`: concurrent async fetching for multiple symbols with batching (batch_size=50)
-    - Implement `disconnect()`: clean up resources
-    - Handle connection failures with exponential backoff retry
+   - [x] 15.1 Implement at least one concrete DataProvider
+    - Create `src/momentum/providers/yahoo_provider.py` (Yahoo Finance, free, no API key required)
+    - Implement `connect()`, `fetch_ohlcv()`, `fetch_batch()`, `disconnect()`
+    - Handle rate limits with batching and async concurrency control
     - _Requirements: 1.1, 1.2, 1.5, 1.6, 16.2, 16.5_
 
   - [ ]* 15.2 Write unit tests for DataProvider implementation
