@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from src.momentum.models import EODReport, MomentumSignal, ScanCycleResult, SetupType
+from src.momentum.utils.db_retry import retry_on_lock
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ class ScanLogger:
             conn.executescript(self._get_schema())
             conn.commit()
         except sqlite3.Error as e:
-            logger.error(f"Failed to initialize scan logger database: {e}")
+            logger.error("Failed to initialize scan logger database: %s", e)
         finally:
             conn.close()
 
@@ -129,6 +130,21 @@ class ScanLogger:
         """
 
     def log_cycle(self, cycle: ScanCycleResult) -> Optional[int]:
+        """Store a complete scan cycle result to the database.
+
+        Persists all indicators, scores, triggered/rejected setups, and timestamps.
+        Retries on database lock errors with exponential backoff.
+
+        Args:
+            cycle: The ScanCycleResult from a completed scan cycle.
+
+        Returns:
+            The scan_cycle_id of the inserted record, or None on failure.
+        """
+        return self._log_cycle_impl(cycle)
+
+    @retry_on_lock()
+    def _log_cycle_impl(self, cycle: ScanCycleResult) -> Optional[int]:
         """Store a complete scan cycle result to the database.
 
         Persists all indicators, scores, triggered/rejected setups, and timestamps.
@@ -212,14 +228,15 @@ class ScanLogger:
 
             conn.commit()
             logger.debug(
-                f"Logged scan cycle at {cycle.timestamp.isoformat()}: "
-                f"{len(cycle.signals_generated)} signals, "
-                f"{cycle.signals_suppressed} suppressed"
+                "Logged scan cycle at %s: %d signals, %d suppressed",
+                cycle.timestamp.isoformat(),
+                len(cycle.signals_generated),
+                cycle.signals_suppressed,
             )
             return scan_cycle_id
 
         except sqlite3.Error as e:
-            logger.error(f"Failed to log scan cycle: {e}")
+            logger.error("Failed to log scan cycle: %s", e)
             conn.rollback()
             return None
         finally:
@@ -346,7 +363,7 @@ class ScanLogger:
             )
 
         except sqlite3.Error as e:
-            logger.error(f"Failed to generate EOD report for {report_date}: {e}")
+            logger.error("Failed to generate EOD report for %s: %s", report_date, e)
             return EODReport(
                 date=datetime.combine(report_date, datetime.min.time()),
                 total_scans=0,

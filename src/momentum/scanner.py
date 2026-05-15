@@ -13,7 +13,7 @@ Requirements: 1.3, 1.6, 16.1, 16.2, 16.3, 16.4, 18.1, 18.3
 
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -32,11 +32,9 @@ from src.momentum.stage3_entry_trigger import Stage3EntryTrigger
 from src.momentum.trade_journal import TradeJournal
 from src.momentum.trade_levels import TradeLevelCalculator
 from src.momentum.universe_manager import UniverseManager
+from src.momentum.utils.timezones import IST
 
 logger = logging.getLogger(__name__)
-
-# IST timezone offset (UTC+5:30)
-IST = timezone(timedelta(hours=5, minutes=30))
 
 # NIFTY 50 symbol used for relative strength and breadth calculations
 NIFTY_SYMBOL = "NIFTY 50"
@@ -301,7 +299,7 @@ class MomentumScanner:
             return result
 
         except Exception as e:
-            logger.error(f"Scan cycle failed with unexpected error: {e}", exc_info=True)
+            logger.error("Scan cycle failed with unexpected error: %s", e, exc_info=True)
             # Return partial result on unexpected failure
             return self._build_result(
                 now, start_time, stage1_passed, stage2_ranked,
@@ -331,7 +329,7 @@ class MomentumScanner:
             )
             return data
         except Exception as e:
-            logger.error(f"Failed to fetch 1H batch data: {e}")
+            logger.error("Failed to fetch 1H batch data: %s", e)
             return {}
 
     async def _fetch_15m_data(
@@ -352,7 +350,7 @@ class MomentumScanner:
             )
             return data
         except Exception as e:
-            logger.error(f"Failed to fetch 15m batch data: {e}")
+            logger.error("Failed to fetch 15m batch data: %s", e)
             return {}
 
     def _filter_stale_data(
@@ -459,7 +457,7 @@ class MomentumScanner:
                 advancing, declining, nifty_15m
             )
         except Exception as e:
-            logger.error(f"Market breadth check failed: {e}")
+            logger.error("Market breadth check failed: %s", e)
             # On error, assume healthy to avoid suppressing signals
             return True
 
@@ -486,7 +484,7 @@ class MomentumScanner:
                 if result is not None:
                     triggered[symbol] = result
             except Exception as e:
-                logger.debug(f"{symbol}: Stage 3 detection error — {e}")
+                logger.debug("%s: Stage 3 detection error — %s", symbol, e)
                 continue
 
         return triggered
@@ -564,7 +562,7 @@ class MomentumScanner:
                     }
 
             except Exception as e:
-                logger.debug(f"{symbol}: Trade level calculation error — {e}")
+                logger.debug("%s: Trade level calculation error — %s", symbol, e)
                 continue
 
         return results
@@ -596,7 +594,7 @@ class MomentumScanner:
             return self.sector_analyzer.get_sector_scores(sector_data, nifty_data)
 
         except Exception as e:
-            logger.error(f"Sector score calculation failed: {e}")
+            logger.error("Sector score calculation failed: %s", e)
             return {}
 
     def _build_candidates(
@@ -732,7 +730,7 @@ class MomentumScanner:
         try:
             self.alert_formatter.send(signal)
         except Exception as e:
-            logger.error(f"Alert send failed for {signal.symbol}: {e}")
+            logger.error("Alert send failed for %s: %s", signal.symbol, e)
 
     def _record_in_journal(self, signal: MomentumSignal) -> None:
         """Record a signal in the trade journal for tracking.
@@ -743,7 +741,7 @@ class MomentumScanner:
         try:
             self.trade_journal.record_signal(signal)
         except Exception as e:
-            logger.error(f"Failed to record signal in journal for {signal.symbol}: {e}")
+            logger.error("Failed to record signal in journal for %s: %s", signal.symbol, e)
 
     async def _monitor_journal_trades(self) -> None:
         """Fetch 15m data for open journal trades and check SL/target hits.
@@ -768,7 +766,7 @@ class MomentumScanner:
                 self.trade_journal.check_open_trades(price_data)
 
         except Exception as e:
-            logger.error(f"Journal trade monitoring failed: {e}")
+            logger.error("Journal trade monitoring failed: %s", e)
 
     def _log_cycle(self, result: ScanCycleResult) -> None:
         """Log scan cycle to database. Failure is non-critical.
@@ -779,7 +777,7 @@ class MomentumScanner:
         try:
             self.scan_logger.log_cycle(result)
         except Exception as e:
-            logger.error(f"Failed to log scan cycle: {e}")
+            logger.error("Failed to log scan cycle: %s", e)
 
     def _check_duration(self, duration_seconds: float) -> None:
         """Check cycle duration and log warnings/errors as appropriate.
@@ -787,18 +785,18 @@ class MomentumScanner:
         Args:
             duration_seconds: How long the cycle took in seconds.
         """
-        if duration_seconds > self.config.warn_scan_duration_seconds:
+        if duration_seconds > self.config.max_scan_duration_seconds:
+            logger.warning(
+                "Scan cycle took %.1fs — exceeds WARNING threshold of %ds.",
+                duration_seconds,
+                self.config.max_scan_duration_seconds,
+            )
+        elif duration_seconds > self.config.warn_scan_duration_seconds:
             logger.error(
                 "Scan cycle took %.1fs — exceeds ERROR threshold of %ds. "
                 "Investigate performance bottleneck.",
                 duration_seconds,
                 self.config.warn_scan_duration_seconds,
-            )
-        elif duration_seconds > self.config.max_scan_duration_seconds:
-            logger.warning(
-                "Scan cycle took %.1fs — exceeds WARNING threshold of %ds.",
-                duration_seconds,
-                self.config.max_scan_duration_seconds,
             )
         else:
             logger.info("Scan cycle completed in %.1fs.", duration_seconds)

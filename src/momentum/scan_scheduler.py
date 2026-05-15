@@ -4,63 +4,65 @@ Manages scan cycle execution during market hours (09:15-15:30 IST) with:
 - 2-minute scan intervals
 - Pre-market preparation at 09:00 IST
 - First scan at 09:30 IST (after first 15m candle completes)
-- NSE holiday calendar awareness
+- NSE holiday calendar awareness (loaded from config/nse_holidays.json)
 - Weekday-only execution
 """
 
 import asyncio
+import json
 import logging
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta
+from pathlib import Path
 from typing import Awaitable, Callable, Optional, Set
 
 from src.momentum.models import ScannerConfig
+from src.momentum.utils.timezones import IST
 
 logger = logging.getLogger(__name__)
 
-# IST timezone: UTC+5:30
-IST = timezone(timedelta(hours=5, minutes=30))
+# Path to the NSE holidays configuration file
+_HOLIDAYS_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "nse_holidays.json"
 
-# NSE Market Holidays 2024-2025 (major holidays)
-# These are dates when NSE is closed for trading
-NSE_HOLIDAYS: Set[date] = {
-    # 2024 holidays
-    date(2024, 1, 26),   # Republic Day
-    date(2024, 3, 8),    # Maha Shivaratri
-    date(2024, 3, 25),   # Holi
-    date(2024, 3, 29),   # Good Friday
-    date(2024, 4, 11),   # Eid ul-Fitr
-    date(2024, 4, 17),   # Ram Navami
-    date(2024, 4, 21),   # Mahavir Jayanti
-    date(2024, 5, 23),   # Buddha Purnima
-    date(2024, 6, 17),   # Eid ul-Adha
-    date(2024, 7, 17),   # Muharram
-    date(2024, 8, 15),   # Independence Day
-    date(2024, 10, 2),   # Gandhi Jayanti
-    date(2024, 10, 12),  # Dussehra
-    date(2024, 10, 31),  # Diwali (Laxmi Puja)
-    date(2024, 11, 1),   # Diwali (Balipratipada)
-    date(2024, 11, 15),  # Guru Nanak Jayanti
-    date(2024, 12, 25),  # Christmas
-    # 2025 holidays
-    date(2025, 1, 26),   # Republic Day
-    date(2025, 2, 26),   # Maha Shivaratri
-    date(2025, 3, 14),   # Holi
-    date(2025, 3, 31),   # Eid ul-Fitr
-    date(2025, 4, 10),   # Mahavir Jayanti
-    date(2025, 4, 14),   # Dr. Ambedkar Jayanti
-    date(2025, 4, 18),   # Good Friday
-    date(2025, 5, 12),   # Buddha Purnima
-    date(2025, 6, 7),    # Eid ul-Adha
-    date(2025, 7, 6),    # Muharram
-    date(2025, 8, 15),   # Independence Day
-    date(2025, 8, 16),   # Janmashtami
-    date(2025, 9, 5),    # Milad un-Nabi
-    date(2025, 10, 2),   # Gandhi Jayanti / Dussehra
-    date(2025, 10, 21),  # Diwali (Laxmi Puja)
-    date(2025, 10, 22),  # Diwali (Balipratipada)
-    date(2025, 11, 5),   # Guru Nanak Jayanti
-    date(2025, 12, 25),  # Christmas
-}
+
+def _load_nse_holidays() -> Set[date]:
+    """Load NSE holidays from the external JSON config file.
+
+    Falls back to an empty set with a warning if the file is missing or invalid.
+
+    Returns:
+        Set of date objects representing NSE market holidays.
+    """
+    if not _HOLIDAYS_CONFIG_PATH.exists():
+        logger.warning(
+            "NSE holidays config not found at '%s'. No holidays will be observed.",
+            _HOLIDAYS_CONFIG_PATH,
+        )
+        return set()
+
+    try:
+        with open(_HOLIDAYS_CONFIG_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        holidays: Set[date] = set()
+        holidays_by_year = data.get("holidays", {})
+
+        for _year, date_strings in holidays_by_year.items():
+            for date_str in date_strings:
+                try:
+                    holidays.add(date.fromisoformat(date_str))
+                except ValueError:
+                    logger.warning("Invalid date in holidays config: '%s'", date_str)
+
+        logger.info("Loaded %d NSE holidays from config.", len(holidays))
+        return holidays
+
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("Failed to load NSE holidays config: %s", e)
+        return set()
+
+
+# Load holidays at module import time
+NSE_HOLIDAYS: Set[date] = _load_nse_holidays()
 
 
 class ScanScheduler:

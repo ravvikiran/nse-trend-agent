@@ -60,21 +60,23 @@ class Stage1TrendFilter:
         for symbol, df in stocks_1h_data.items():
             try:
                 if not self._is_valid_dataframe(df):
-                    logger.debug(f"{symbol}: insufficient data for Stage 1 filter")
+                    logger.debug("%s: insufficient data for Stage 1 filter", symbol)
                     continue
 
                 is_bullish = self._evaluate_bullish(df)
                 if is_bullish:
                     passed_symbols.append(symbol)
                 else:
-                    logger.debug(f"{symbol}: failed Stage 1 trend filter")
+                    logger.debug("%s: failed Stage 1 trend filter", symbol)
 
             except Exception as e:
-                logger.error(f"{symbol}: error in Stage 1 filter — {e}")
+                logger.error("%s: error in Stage 1 filter — %s", symbol, e)
                 continue
 
         logger.info(
-            f"Stage 1 Trend Filter: {len(passed_symbols)}/{len(stocks_1h_data)} stocks passed"
+            "Stage 1 Trend Filter: %d/%d stocks passed",
+            len(passed_symbols),
+            len(stocks_1h_data),
         )
         return passed_symbols
 
@@ -123,7 +125,7 @@ class Stage1TrendFilter:
             return max(0.0, min(100.0, total_score))
 
         except Exception as e:
-            logger.error(f"Error calculating trend quality score: {e}")
+            logger.error("Error calculating trend quality score: %s", e)
             return 0.0
 
     def _is_valid_dataframe(self, df: pd.DataFrame) -> bool:

@@ -6,14 +6,13 @@ Also formats and sends end-of-day (EOD) reports summarizing daily scan activity.
 """
 
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 
+from src.momentum.alert_service import AlertService
 from src.momentum.models import EODReport, MomentumSignal, SetupType
+from src.momentum.utils.timezones import IST
 
 logger = logging.getLogger(__name__)
-
-# IST timezone offset (UTC+5:30)
-IST = timezone(timedelta(hours=5, minutes=30))
 
 
 class AlertFormatter:
@@ -29,11 +28,11 @@ class AlertFormatter:
         SetupType.COMPRESSION_BREAKOUT: "🔵",
     }
 
-    def __init__(self, alert_service=None):
+    def __init__(self, alert_service: "AlertService | None" = None):
         """Initialize AlertFormatter.
 
         Args:
-            alert_service: An instance of AlertService from src/notifications/alert_service.py.
+            alert_service: An instance implementing the AlertService interface.
                           If None, send() will log a warning and return False.
         """
         self.alert_service = alert_service

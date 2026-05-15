@@ -16,8 +16,8 @@ def config():
 
 @pytest.fixture
 def dedup(config):
-    """Deduplicator instance with default config."""
-    return Deduplicator(config)
+    """Deduplicator instance with default config using in-memory database."""
+    return Deduplicator(config, db_path=":memory:")
 
 
 @pytest.fixture

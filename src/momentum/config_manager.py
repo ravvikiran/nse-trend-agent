@@ -9,6 +9,9 @@ from src.momentum.models import ScannerConfig
 
 logger = logging.getLogger(__name__)
 
+# Resolve config path relative to project root (not CWD)
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
 # Valid ranges for configuration parameters
 _VALID_RANGES: Dict[str, tuple] = {
     "ema_fast": (5, 50),
@@ -45,7 +48,7 @@ _VALID_RANGES: Dict[str, tuple] = {
 class ConfigManager:
     """Loads and validates scanner configuration from JSON file."""
 
-    DEFAULT_CONFIG_PATH = "config/momentum_scanner.json"
+    DEFAULT_CONFIG_PATH = str(_PROJECT_ROOT / "config" / "momentum_scanner.json")
 
     def __init__(self, config_path: Optional[str] = None):
         self._config_path = config_path or self.DEFAULT_CONFIG_PATH
@@ -53,11 +56,18 @@ class ConfigManager:
     def load(self, path: Optional[str] = None) -> ScannerConfig:
         """Load config from JSON file, validate ranges, apply defaults for missing values.
 
+        Distinguishes between:
+        - File not found: logs warning, uses defaults (acceptable for first run)
+        - Invalid JSON: logs error and raises ValueError (user should fix their config)
+
         Args:
             path: Optional override path to config file. Uses instance path if not provided.
 
         Returns:
             ScannerConfig with validated values and defaults applied.
+
+        Raises:
+            ValueError: If the config file exists but contains invalid JSON.
         """
         config_path = path or self._config_path
         raw_config = self._read_config_file(config_path)
@@ -69,13 +79,75 @@ class ConfigManager:
             )
             return ScannerConfig()
 
-        return self._build_config(raw_config)
+        config = self._build_config(raw_config)
+        self._validate_cross_fields(config)
+        return config
+
+    def _validate_cross_fields(self, config: ScannerConfig) -> None:
+        """Validate cross-field constraints that individual range checks cannot catch.
+
+        Checks:
+        - EMA periods are strictly increasing (fast < medium < slow)
+        - RS weights sum to approximately 1.0
+        - Ranking weights sum to approximately 1.0
+        - warn_scan_duration > max_scan_duration (warn is the higher threshold)
+
+        Args:
+            config: The built ScannerConfig to validate.
+
+        Raises:
+            ValueError: If any cross-field constraint is violated.
+        """
+        # EMA periods must be strictly increasing
+        if not (config.ema_fast < config.ema_medium < config.ema_slow):
+            raise ValueError(
+                f"EMA periods must be strictly increasing: "
+                f"ema_fast ({config.ema_fast}) < ema_medium ({config.ema_medium}) "
+                f"< ema_slow ({config.ema_slow})"
+            )
+
+        # RS weights should sum to ~1.0
+        rs_sum = config.rs_intraday_weight + config.rs_1day_weight + config.rs_5day_weight
+        if abs(rs_sum - 1.0) > 0.01:
+            raise ValueError(
+                f"RS weights must sum to 1.0 (got {rs_sum:.3f}): "
+                f"intraday={config.rs_intraday_weight}, "
+                f"1day={config.rs_1day_weight}, "
+                f"5day={config.rs_5day_weight}"
+            )
+
+        # Ranking weights should sum to ~1.0
+        rank_sum = (
+            config.rank_relative_volume_weight
+            + config.rank_breakout_strength_weight
+            + config.rank_trend_quality_weight
+            + config.rank_distance_weight
+            + config.rank_sector_weight
+        )
+        if abs(rank_sum - 1.0) > 0.01:
+            raise ValueError(
+                f"Ranking weights must sum to 1.0 (got {rank_sum:.3f})"
+            )
+
+        # Duration thresholds: warn should be higher than max (warn = error level)
+        if config.warn_scan_duration_seconds <= config.max_scan_duration_seconds:
+            logger.warning(
+                "warn_scan_duration_seconds (%d) should be > max_scan_duration_seconds (%d). "
+                "The scanner uses max as WARNING threshold and warn as ERROR threshold.",
+                config.warn_scan_duration_seconds,
+                config.max_scan_duration_seconds,
+            )
 
     def _read_config_file(self, path: str) -> Optional[Dict[str, Any]]:
         """Read and parse JSON config file.
 
+        Distinguishes between file-not-found (returns None) and invalid JSON (raises).
+
         Returns:
-            Parsed dict or None if file is missing/unreadable.
+            Parsed dict or None if file is missing.
+
+        Raises:
+            ValueError: If the file exists but contains invalid JSON.
         """
         config_file = Path(path)
         if not config_file.exists():
@@ -84,7 +156,11 @@ class ConfigManager:
         try:
             with open(config_file, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Configuration file '{path}' contains invalid JSON: {e}"
+            ) from e
+        except OSError as e:
             logger.warning("Failed to read config file '%s': %s", path, e)
             return None
 

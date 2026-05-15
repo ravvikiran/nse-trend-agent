@@ -12,11 +12,10 @@ Sends Telegram updates when:
 Stores all trade outcomes in SQLite for performance tracking.
 """
 
-import json
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -24,11 +23,9 @@ from typing import Dict, List, Optional
 import pandas as pd
 
 from src.momentum.models import MomentumSignal
+from src.momentum.utils.timezones import IST
 
 logger = logging.getLogger(__name__)
-
-# IST timezone
-IST = timezone(timedelta(hours=5, minutes=30))
 
 # Default database path
 DEFAULT_DB_PATH = "data/momentum_scanner.db"

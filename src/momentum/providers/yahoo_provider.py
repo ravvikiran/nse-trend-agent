@@ -65,6 +65,19 @@ class YahooFinanceProvider(DataProvider):
         self.batch_size: int = batch_size
         self._yf = None  # yfinance module (lazy loaded)
 
+        # Connection pooling for performance (PERF-001)
+        import requests
+        from requests.adapters import HTTPAdapter
+
+        self._session = requests.Session()
+        adapter = HTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=20,
+            max_retries=3,
+        )
+        self._session.mount("https://", adapter)
+        self._session.mount("http://", adapter)
+
     async def connect(self) -> bool:
         """Verify yfinance is available and ready.
 

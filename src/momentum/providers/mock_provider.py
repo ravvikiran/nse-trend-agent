@@ -116,11 +116,11 @@ class MockDataProvider(DataProvider):
             or None if symbol is in the failure set.
         """
         if symbol in self.symbols_to_fail:
-            logger.debug(f"MockDataProvider: simulating failure for {symbol}")
+            logger.debug("MockDataProvider: simulating failure for %s", symbol)
             return None
 
         if timeframe not in self.TIMEFRAME_MINUTES:
-            logger.warning(f"MockDataProvider: unsupported timeframe '{timeframe}'")
+            logger.warning("MockDataProvider: unsupported timeframe '%s'", timeframe)
             return None
 
         base_price = self.base_prices.get(symbol, 1000.0)

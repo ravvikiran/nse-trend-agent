@@ -269,45 +269,9 @@ class Stage3EntryTrigger:
             return None
 
         # Condition 1 & 2: Look for 3-6 tight-range candles before the breakout
-        # Check windows of 3, 4, 5, 6 candles preceding the current candle
-        found_compression = False
-        for lookback in range(3, 7):  # 3 to 6 candles
-            start_idx = latest_idx - lookback
-            if start_idx < 0:
-                continue
-
-            tight_candles = df.iloc[start_idx:latest_idx]  # Exclude breakout candle
-
-            # Check if all candles in the window are tight-range
-            # Tight = range < 70% of ATR at that point
-            all_tight = True
-            for i in range(len(tight_candles)):
-                candle = tight_candles.iloc[i]
-                candle_range = candle["high"] - candle["low"]
-                atr_at_point = atr_series.iloc[start_idx + i]
-                if pd.isna(atr_at_point) or atr_at_point == 0:
-                    all_tight = False
-                    break
-                if candle_range >= 0.7 * atr_at_point:
-                    all_tight = False
-                    break
-
-            if not all_tight:
-                continue
-
-            # Condition 2: ATR contraction — current ATR < 70% of ATR from 10 candles ago
-            atr_lookback_idx = latest_idx - 10
-            if atr_lookback_idx < 0:
-                atr_lookback_idx = 0
-            prior_atr = atr_series.iloc[atr_lookback_idx]
-            if pd.isna(prior_atr) or prior_atr == 0:
-                continue
-
-            has_atr_contraction = current_atr < 0.7 * prior_atr
-
-            if has_atr_contraction:
-                found_compression = True
-                break
+        found_compression = self._find_compression_window(
+            df, atr_series, latest_idx, current_atr
+        )
 
         if not found_compression:
             return None
@@ -321,6 +285,78 @@ class Stage3EntryTrigger:
             entry_price=current["high"],
             relative_volume=rv,
         )
+
+    def _find_compression_window(
+        self,
+        df: pd.DataFrame,
+        atr_series: pd.Series,
+        latest_idx: int,
+        current_atr: float,
+    ) -> bool:
+        """Search for a valid compression window (3-6 tight candles) before breakout.
+
+        Checks windows of 3, 4, 5, 6 candles preceding the breakout candle.
+        Each candle in the window must have range < 70% of ATR at that point,
+        and the current ATR must be < 70% of the ATR from 10 candles ago.
+
+        Args:
+            df: 15m OHLCV DataFrame.
+            atr_series: Pre-computed ATR series.
+            latest_idx: Index of the breakout candle.
+            current_atr: ATR value at the breakout candle.
+
+        Returns:
+            True if a valid compression window is found.
+        """
+        for lookback in range(3, 7):  # 3 to 6 candles
+            start_idx = latest_idx - lookback
+            if start_idx < 0:
+                continue
+
+            # Check if all candles in the window are tight-range
+            if not self._has_tight_candle_window(df, atr_series, start_idx, latest_idx):
+                continue
+
+            # Condition 2: ATR contraction — current ATR < 70% of ATR from 10 candles ago
+            atr_lookback_idx = max(0, latest_idx - 10)
+            prior_atr = atr_series.iloc[atr_lookback_idx]
+            if pd.isna(prior_atr) or prior_atr == 0:
+                continue
+
+            if current_atr < 0.7 * prior_atr:
+                return True
+
+        return False
+
+    def _has_tight_candle_window(
+        self,
+        df: pd.DataFrame,
+        atr_series: pd.Series,
+        start_idx: int,
+        end_idx: int,
+    ) -> bool:
+        """Check if all candles in [start_idx, end_idx) have tight range.
+
+        A candle is "tight" if its range (high - low) < 70% of ATR at that point.
+
+        Args:
+            df: OHLCV DataFrame.
+            atr_series: Pre-computed ATR series.
+            start_idx: Start index (inclusive).
+            end_idx: End index (exclusive, the breakout candle).
+
+        Returns:
+            True if all candles in the window are tight-range.
+        """
+        for i in range(start_idx, end_idx):
+            candle = df.iloc[i]
+            atr_val = atr_series.iloc[i]
+            if pd.isna(atr_val) or atr_val == 0:
+                return False
+            candle_range = candle["high"] - candle["low"]
+            if candle_range >= 0.7 * atr_val:
+                return False
+        return True
 
     def _calculate_breakout_strength(self, df: pd.DataFrame) -> float:
         """Calculate composite breakout strength score (0-100).
@@ -493,7 +529,8 @@ class Stage3EntryTrigger:
             rsi = 100.0 - (100.0 / (1.0 + rs))
             return float(rsi)
 
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to calculate RSI: %s", e)
             return None
 
     def _calculate_atr_percentage(self, df: pd.DataFrame) -> Optional[float]:
@@ -528,5 +565,6 @@ class Stage3EntryTrigger:
 
             return float((atr_value / current_price) * 100.0)
 
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to calculate ATR percentage: %s", e)
             return None

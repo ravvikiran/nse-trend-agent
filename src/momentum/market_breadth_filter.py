@@ -124,6 +124,9 @@ class MarketBreadthFilter:
         # Calculate EMA(20) on the close prices
         ema_20 = nifty_15m_data["close"].ewm(span=20, adjust=False).mean()
 
+        if len(ema_20) == 0:
+            return False
+
         current_price = nifty_15m_data["close"].iloc[-1]
         current_ema = ema_20.iloc[-1]
 

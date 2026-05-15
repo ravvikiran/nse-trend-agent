@@ -151,6 +151,9 @@ class Stage2RelativeStrength:
             return None
 
         close = data["close"]
+        if len(close) == 0 or close.empty:
+            return None
+
         current_price = close.iloc[-1]
 
         if periods == 0:

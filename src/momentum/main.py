@@ -66,6 +66,13 @@ def parse_args() -> argparse.Namespace:
         help="Use MockDataProvider for testing (no broker API required)",
     )
     parser.add_argument(
+        "--broker",
+        type=str,
+        default="yahoo",
+        choices=["yahoo", "mock"],
+        help="Data provider to use (default: yahoo). 'mock' is equivalent to --mock flag.",
+    )
+    parser.add_argument(
         "--config",
         type=str,
         default=None,
@@ -124,24 +131,25 @@ def setup_logging(log_level: str, log_file: str) -> None:
     logging.getLogger("asyncio").setLevel(logging.WARNING)
 
 
-def create_data_provider(use_mock: bool, config: ScannerConfig) -> DataProvider:
+def create_data_provider(use_mock: bool, config: ScannerConfig, broker: str = "yahoo") -> DataProvider:
     """Create the appropriate DataProvider based on CLI flag or environment.
 
     Priority order:
-      1. --mock flag → MockDataProvider
-      2. Default → YahooFinanceProvider (free, no API key needed)
+      1. --mock flag or --broker mock → MockDataProvider
+      2. --broker yahoo (default) → YahooFinanceProvider (free, no API key needed)
 
     Args:
         use_mock: If True, use MockDataProvider regardless of environment.
         config: Scanner configuration (used for batch_size).
+        broker: Broker name from --broker CLI argument.
 
     Returns:
         A concrete DataProvider instance.
     """
-    if use_mock:
+    if use_mock or broker == "mock":
         from src.momentum.providers.mock_provider import MockDataProvider
 
-        logger.info("Using MockDataProvider (--mock flag)")
+        logger.info("Using MockDataProvider (--mock flag or --broker mock)")
         return MockDataProvider(seed=42)
 
     # Default: Yahoo Finance (free, no credentials needed)
@@ -220,7 +228,9 @@ async def run_scanner(args: argparse.Namespace) -> None:
     logger.info("Configuration loaded (scan_interval=%ds)", config.scan_interval_seconds)
 
     # Step 2: Create data provider
-    data_provider = create_data_provider(use_mock=args.mock, config=config)
+    data_provider = create_data_provider(
+        use_mock=args.mock, config=config, broker=args.broker
+    )
 
     # Step 3: Connect to data provider
     connected = await data_provider.connect()

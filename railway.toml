@@ -1,4 +1,8 @@
 [deploy]
 # Start at 09:00 IST (03:30 UTC) on weekdays
 # The process runs scans until 15:30 IST then exits on its own
+#
+# NOTE: This schedule assumes UTC. India does not observe DST, so
+# 03:30 UTC = 09:00 IST year-round. If Railway changes timezone handling,
+# this schedule may need adjustment.
 cronSchedule = "30 3 * * 1-5"

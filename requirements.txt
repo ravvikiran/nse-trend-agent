@@ -1,18 +1,18 @@
 # QuantGridIndia — NSE Momentum Scanner - Requirements
 
 # Market Data (Yahoo Finance - free, no API key)
-yfinance>=0.2.36
+yfinance==0.2.36
 
 # Data Processing
-pandas>=2.0.0
-numpy>=1.24.0
-ta>=0.11.0
+pandas==2.2.2
+numpy==1.26.4
+ta==0.11.0
 
 # HTTP Requests (for Telegram API)
-requests>=2.31.0
+requests==2.31.0
 
 # Environment variable loading
-python-dotenv>=1.0.0
+python-dotenv==1.0.1
 
 # Date/Time utilities
-pytz>=2023.3
+pytz==2024.1

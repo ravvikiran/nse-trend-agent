@@ -1,8 +1,10 @@
 """
 Self-contained Telegram service for the NSE Momentum Scanner.
 
-Sends messages via the Telegram Bot API using simple HTTP requests.
-No dependency on the old alert_service module.
+Sends messages via the Telegram Bot API using HTTP requests with
+connection pooling for performance.
+
+Implements the AlertService interface for decoupled alert delivery.
 
 Environment variables:
     TELEGRAM_BOT_TOKEN: Bot token from @BotFather
@@ -14,15 +16,18 @@ import os
 from typing import Optional
 
 import requests
+from requests.adapters import HTTPAdapter
+
+from src.momentum.alert_service import AlertService
 
 logger = logging.getLogger(__name__)
 
 
-class TelegramService:
+class TelegramService(AlertService):
     """Sends messages via Telegram Bot API.
 
-    Simple, self-contained implementation that only needs
-    bot_token and chat_id to function.
+    Uses HTTP connection pooling for efficient request handling.
+    Implements the AlertService interface for decoupled usage.
     """
 
     def __init__(
@@ -30,7 +35,7 @@ class TelegramService:
         bot_token: Optional[str] = None,
         chat_id: Optional[str] = None,
     ):
-        """Initialize TelegramService.
+        """Initialize TelegramService with connection pooling.
 
         Args:
             bot_token: Telegram bot token. Falls back to TELEGRAM_BOT_TOKEN env var.
@@ -39,6 +44,15 @@ class TelegramService:
         self.bot_token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN", "")
         self.chat_id = chat_id or os.environ.get("TELEGRAM_CHAT_ID", "")
         self.enabled = bool(self.bot_token and self.chat_id)
+
+        # Connection pooling for performance (PERF-001)
+        self._session = requests.Session()
+        adapter = HTTPAdapter(
+            pool_connections=5,
+            pool_maxsize=10,
+            max_retries=3,
+        )
+        self._session.mount("https://", adapter)
 
         if self.enabled:
             logger.info("TelegramService enabled (chat_id: %s)", self.chat_id)
@@ -69,7 +83,7 @@ class TelegramService:
                 "parse_mode": parse_mode,
             }
 
-            response = requests.post(url, json=payload, timeout=30)
+            response = self._session.post(url, json=payload, timeout=30)
 
             if response.status_code == 200:
                 logger.debug("Telegram message sent successfully")
@@ -103,7 +117,7 @@ class TelegramService:
 
         try:
             url = f"https://api.telegram.org/bot{self.bot_token}/getMe"
-            response = requests.get(url, timeout=10)
+            response = self._session.get(url, timeout=10)
             if response.status_code == 200 and response.json().get("ok"):
                 bot_name = response.json()["result"]["username"]
                 logger.info("Telegram bot connected: @%s", bot_name)
@@ -112,3 +126,10 @@ class TelegramService:
         except Exception as e:
             logger.error("Telegram connection test failed: %s", e)
             return False
+
+    def __del__(self):
+        """Close the session on garbage collection."""
+        try:
+            self._session.close()
+        except Exception:
+            pass

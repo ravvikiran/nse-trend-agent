@@ -1,5 +1,7 @@
 """Data models for the NSE Momentum Scanner."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -36,9 +38,63 @@ class MomentumSignal:
     trailing_stop: float  # EMA(20) on 15m
 
 
+# --- Sub-config dataclasses for ScannerConfig (ARCH-002) ---
+
+
+@dataclass
+class EMAConfig:
+    """EMA-related configuration parameters."""
+
+    fast: int = 20
+    medium: int = 50
+    slow: int = 200
+    slope_lookback: int = 5
+
+
+@dataclass
+class ATRConfig:
+    """ATR-related configuration parameters."""
+
+    period: int = 14
+    sl_multiplier: float = 1.2
+
+
+@dataclass
+class VolumeConfig:
+    """Volume-related configuration parameters."""
+
+    ma_period: int = 30
+    expansion_threshold: float = 1.5
+
+
+@dataclass
+class RSWeights:
+    """Relative Strength window weights."""
+
+    intraday: float = 0.5
+    one_day: float = 0.3
+    five_day: float = 0.2
+
+
+@dataclass
+class RankingWeights:
+    """Final ranking component weights."""
+
+    relative_volume: float = 0.35
+    breakout_strength: float = 0.25
+    trend_quality: float = 0.20
+    distance: float = 0.10
+    sector: float = 0.10
+
+
 @dataclass
 class ScannerConfig:
-    """All configurable parameters for the momentum scanner."""
+    """All configurable parameters for the momentum scanner.
+
+    While this dataclass retains flat field access for backward compatibility,
+    the fields are logically grouped into sub-configs (EMAConfig, ATRConfig, etc.)
+    for clarity. The flat fields are the canonical source used by all pipeline stages.
+    """
 
     # EMA periods
     ema_fast: int = 20
@@ -90,6 +146,54 @@ class ScannerConfig:
     max_scan_duration_seconds: int = 60
     warn_scan_duration_seconds: int = 90
     batch_size: int = 50
+
+    # --- Convenience sub-config accessors ---
+
+    @property
+    def ema(self) -> EMAConfig:
+        """Get EMA configuration as a sub-config object."""
+        return EMAConfig(
+            fast=self.ema_fast,
+            medium=self.ema_medium,
+            slow=self.ema_slow,
+            slope_lookback=self.ema_slope_lookback,
+        )
+
+    @property
+    def atr(self) -> ATRConfig:
+        """Get ATR configuration as a sub-config object."""
+        return ATRConfig(
+            period=self.atr_period,
+            sl_multiplier=self.atr_sl_multiplier,
+        )
+
+    @property
+    def volume(self) -> VolumeConfig:
+        """Get volume configuration as a sub-config object."""
+        return VolumeConfig(
+            ma_period=self.volume_ma_period,
+            expansion_threshold=self.volume_expansion_threshold,
+        )
+
+    @property
+    def rs_weights(self) -> RSWeights:
+        """Get RS weights as a sub-config object."""
+        return RSWeights(
+            intraday=self.rs_intraday_weight,
+            one_day=self.rs_1day_weight,
+            five_day=self.rs_5day_weight,
+        )
+
+    @property
+    def ranking_weights(self) -> RankingWeights:
+        """Get ranking weights as a sub-config object."""
+        return RankingWeights(
+            relative_volume=self.rank_relative_volume_weight,
+            breakout_strength=self.rank_breakout_strength_weight,
+            trend_quality=self.rank_trend_quality_weight,
+            distance=self.rank_distance_weight,
+            sector=self.rank_sector_weight,
+        )
 
 
 @dataclass
